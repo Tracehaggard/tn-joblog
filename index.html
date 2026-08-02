@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02r">
+<meta name="build" content="2026-08-02s">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -903,22 +903,60 @@ const Cloud = {
       return n;
     }catch(err){ this.setState("err", "Sync error"); console.warn("pull", err); return 0; }
   },
+  /* Postgres date columns reject "" — an empty date must go up as null,
+     or the whole row is rejected and the save is silently lost. */
+  DATE_COLS: ["work_date","next_due","last_billed"],
+  clean(rows){
+    return rows.map(r => {
+      const o = Object.assign({}, r);
+      this.DATE_COLS.forEach(k => { if(o[k] === "" || o[k] === undefined) o[k] = null; });
+      return o;
+    });
+  },
   async push(rows, table){
-    if(!DB.linked() || !rows.length) return;
+    if(!DB.linked() || !rows.length) return true;
     try{
       const r = await fetch(this.base(table), {
         method:"POST",
         headers: this.head({ "Prefer":"resolution=merge-duplicates,return=minimal" }),
-        body: JSON.stringify(rows)
+        body: JSON.stringify(this.clean(rows))
       });
-      if(!r.ok) throw new Error(await r.text());
+      if(!r.ok) throw new Error((await r.text()).slice(0,300));
       this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
-    }catch(err){ this.setState("err","Sync error"); console.warn("push", err); }
+      this.failed = 0;
+      return true;
+    }catch(err){
+      this.setState("err","Not saved to server");
+      console.warn("push", table||"entries", err);
+      /* never fail quietly again — losing a save without saying so is the worst thing this app can do */
+      this.alarm(err && err.message ? err.message : String(err));
+      return false;
+    }
   },
+  alarm(msg){
+    let b = document.getElementById("syncAlarm");
+    if(!b){
+      b = document.createElement("div");
+      b.id = "syncAlarm";
+      b.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:90;background:#b42318;color:#fff;"+
+        "padding:11px 16px;font-size:13.5px;display:flex;align-items:center;gap:12px;"+
+        "box-shadow:0 2px 12px rgba(0,0,0,.2)";
+      document.body.appendChild(b);
+    }
+    b.innerHTML = `<b>Didn't save to the server.</b>
+      <span style="opacity:.9">It's still on this device — don't close the tab. Retrying…</span>
+      <button class="btn sm" id="syncRetry" style="margin-left:auto;background:#fff;border-color:#fff;color:#b42318">Retry now</button>
+      <button class="btn sm" id="syncHide" style="background:transparent;border-color:rgba(255,255,255,.5);color:#fff">Hide</button>`;
+    document.getElementById("syncRetry").onclick = async ()=>{ await Cloud.pushAll(); };
+    document.getElementById("syncHide").onclick = ()=> b.remove();
+  },
+  clearAlarm(){ const b=document.getElementById("syncAlarm"); if(b) b.remove(); },
   async pushAll(){
-    await this.push(DB.s.entries);
-    await this.push(Object.values(DB.s.clients), "clients");
-    await this.push(DB.s.subs, "subs");
+    const a = await this.push(DB.s.entries);
+    const b = await this.push(Object.values(DB.s.clients), "clients");
+    const c = await this.push(DB.s.subs, "subs");
+    if(a && b && c) this.clearAlarm();
+    return a && b && c;
   },
   async test(url, key){
     const r = await fetch(url.replace(/\/+$/,"")+"/rest/v1/entries?select=id&limit=1", {
@@ -1207,8 +1245,10 @@ const UI = {
     this.paintWho();
     this.go(DB.s.person ? "log" : "set");
 
-    const sync = () => Auth.ready().then(ok => {
+    const sync = () => Auth.ready().then(async ok => {
       if(!ok){ this.signInScreen("Your session expired — sign in again."); return; }
+      /* anything that failed to save keeps trying until it lands */
+      if(document.getElementById("syncAlarm")) await Cloud.pushAll();
       Cloud.pull().then(()=>{ if(this.view!=="log") this.render(); });
     });
     sync();
