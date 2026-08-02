@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-01d">
+<meta name="build" content="2026-08-01e">
 <title>TN Info Tech — Job Log</title>
 <style>
 :root{
@@ -157,9 +157,10 @@ textarea.inp{resize:vertical;min-height:92px;line-height:1.5}
 .ent .d{flex:0 0 92px;font-size:12.5px;color:var(--ink-3);font-weight:600;padding-top:1px}
 .ent .n{flex:1;font-size:14px;color:var(--ink-2);white-space:pre-wrap;word-break:break-word}
 .ent .h{flex:0 0 auto;font-size:13px;font-weight:660}
-.ent .x{flex:0 0 auto;opacity:0;color:var(--ink-3);font-size:12px;padding:0 4px}
+.ent .x{flex:0 0 auto;opacity:.35;color:var(--ink-3);font-size:12px;font-weight:650;padding:0 4px}
 .ent:hover .x{opacity:1}
-.ent .x:hover{color:#c0392b}
+.ent .x:hover{color:var(--accent);text-decoration:underline}
+@media(hover:none){.ent .x{opacity:1;color:var(--accent)}}
 
 .empty{padding:44px 18px;text-align:center;color:var(--ink-3);font-size:14px}
 .empty b{display:block;color:var(--ink-2);font-size:15px;margin-bottom:4px;font-weight:640}
@@ -354,6 +355,14 @@ const DB = {
     this.s.entries.push(row); this.save(); Cloud.push([row]);
     this.saveClient({ name: row.client, address: row.address || undefined });  // keep the client record current
     return row;
+  },
+  update(id, patch){
+    const r = this.s.entries.find(x => x.id === id);
+    if(!r) return null;
+    Object.assign(r, patch, { updated_at: new Date().toISOString() });
+    this.save(); Cloud.push([r]);
+    if(r.address) this.saveClient({ name:r.client, address:r.address });
+    return r;
   },
   remove(id){
     const r = this.s.entries.find(x => x.id === id);
@@ -720,14 +729,15 @@ const UI = {
         <div class="panel">
           <div class="panel-h"><h2>Recently Logged</h2></div>
           ${recent.length ? recent.map(e=>`
-            <div style="padding:12px 18px;border-bottom:1px solid var(--line-2)">
+            <button type="button" data-edit="${e.id}" style="display:block;width:100%;text-align:left;padding:12px 18px;border-bottom:1px solid var(--line-2)" title="Tap to edit">
               <div style="display:flex;justify-content:space-between;gap:10px">
                 <b style="font-size:13.5px;font-weight:640">${esc(e.client)}</b>
                 <span class="tnum" style="font-size:13px;font-weight:660">${hFmt(e.hours)}h</span>
               </div>
               <div style="font-size:12px;color:var(--ink-3);margin-top:2px">${esc(D.dayLbl(e.work_date))}${T.range(e.start_time,e.end_time)?" · "+esc(T.range(e.start_time,e.end_time)):""}${e.person?" · "+esc(e.person):""}</div>
-            </div>`).join("")
+            </button>`).join("")
           : `<div class="empty"><b>Nothing yet</b>Your first entry shows up here.</div>`}
+          ${recent.length ? `<div style="padding:10px 18px;font-size:12px;color:var(--ink-3)">Tap any entry to fix it.</div>` : ""}
         </div>
       </div>
     </div>`;
@@ -858,6 +868,7 @@ const UI = {
       this.render();
       document.getElementById("i-client").focus();
     });
+    document.querySelectorAll("[data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
     document.getElementById("i-client").focus();
   },
 
@@ -931,7 +942,7 @@ const UI = {
                   <div class="d">${esc(D.dayLbl(e.work_date))}${T.range(e.start_time,e.end_time)?`<div class="times" style="font-weight:500;margin-top:2px">${esc(T.range(e.start_time,e.end_time))}</div>`:""}</div>
                   <div class="n">${esc(e.notes)}${e.person?`<span style="color:var(--ink-3);font-size:12px"> — ${esc(e.person)}</span>`:""}${MI.of(e)?`<div class="times" style="margin-top:3px">${MI.fmt(MI.of(e))} mi &nbsp;<span style="font-weight:400">(${MI.fmt(e.miles_start)} → ${MI.fmt(e.miles_end)})</span></div>`:""}</div>
                   <div class="h tnum">${hFmt(e.hours)}h</div>
-                  <button class="x noprint" data-del="${e.id}" title="Delete">✕</button>
+                  <button class="x noprint" data-edit="${e.id}" title="Edit">Edit</button>
                 </div>`).join("")}
             </div>
           </div>`).join("")
@@ -944,9 +955,8 @@ const UI = {
     document.getElementById("wPrint").onclick= ()=> window.print();
     document.getElementById("wCopy").onclick = ()=> this.copyReport();
     v.querySelectorAll(".grp-h").forEach(b => b.onclick = ()=> b.parentElement.classList.toggle("open"));
-    v.querySelectorAll("[data-del]").forEach(b => b.onclick = e => {
-      e.stopPropagation();
-      if(confirm("Delete this entry?")){ DB.remove(b.dataset.del); this.render(); this.toast("Entry deleted"); }
+    v.querySelectorAll("[data-edit]").forEach(b => b.onclick = e => {
+      e.stopPropagation(); this.editEntry(b.dataset.edit);
     });
     v.querySelectorAll("[data-open]").forEach(b => b.onclick = e => {
       e.stopPropagation();
@@ -1058,12 +1068,14 @@ const UI = {
                 </div>
                 <div class="txt">${esc(e.notes)}</div>
                 <div class="hh tnum">${hFmt(e.hours)}h</div>
+                <button class="btn ghost sm" data-edit="${e.id}">Edit</button>
               </div>`).join("")
             : `<div class="empty"><b>Nothing logged here yet</b>Jobs you save for ${esc(c.name)} will stack up here.</div>`}
           </div>
         </div>
       </div>`;
 
+    v.querySelectorAll("[data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
     document.getElementById("cBack").onclick = ()=>{ this.openClient = null; this.render(); };
     document.getElementById("cEdit").onclick = ()=> this.editClient(c.name);
     document.getElementById("cLog").onclick  = ()=>{
@@ -1117,6 +1129,106 @@ const UI = {
       this.openClient = nm;
       this.toast("Client saved");
       this.render();
+    };
+  },
+
+  /* ---------- EDIT AN ENTRY ---------- */
+  editEntry(id){
+    const e = DB.s.entries.find(x => x.id === id);
+    if(!e) return;
+    const cl = DB.clientList().map(c=>c.name);
+
+    this.modal("Edit Entry",
+      `<div class="grid2 mb">
+         <div><label class="f" for="x-client">Client</label>
+           <input class="inp" id="x-client" list="xcl" value="${esc(e.client)}" autocomplete="off">
+           <datalist id="xcl">${cl.map(c=>`<option value="${esc(c)}">`).join("")}</datalist></div>
+         <div><label class="f" for="x-date">Date</label>
+           <input class="inp" id="x-date" type="date" value="${esc(e.work_date)}"></div>
+       </div>
+
+       <div class="mb"><label class="f" for="x-addr">Address</label>
+         <input class="inp" id="x-addr" value="${esc(e.address||"")}" autocomplete="off" placeholder="Optional"></div>
+
+       <div class="mb">
+         <label class="f">Time</label>
+         <div class="timerow">
+           <div class="tf"><label class="f" for="x-start" style="font-size:11px">Start</label>
+             <input class="inp" id="x-start" type="time" value="${esc(e.start_time||"")}" style="width:132px"></div>
+           <div class="tf"><label class="f" for="x-end" style="font-size:11px">End</label>
+             <input class="inp" id="x-end" type="time" value="${esc(e.end_time||"")}" style="width:132px"></div>
+           <div class="tf"><label class="f" for="x-hours" style="font-size:11px">Hours billed</label>
+             <input class="inp tnum" id="x-hours" type="number" step="0.25" min="0" value="${e.hours}" style="width:118px"></div>
+         </div>
+         <div class="hint" id="x-tnote">Change the times and the hours recalculate. Or just type the hours directly.</div>
+       </div>
+
+       <div class="mb">
+         <label class="f">Odometer</label>
+         <div class="timerow">
+           <div class="tf"><label class="f" for="x-ms" style="font-size:11px">Miles Start</label>
+             <input class="inp tnum" id="x-ms" type="number" step="0.1" value="${e.miles_start==null?"":e.miles_start}" style="width:132px"></div>
+           <div class="tf"><label class="f" for="x-me" style="font-size:11px">Miles End</label>
+             <input class="inp tnum" id="x-me" type="number" step="0.1" value="${e.miles_end==null?"":e.miles_end}" style="width:132px"></div>
+           <div class="calc" id="x-mcalc" style="min-width:150px"><b>—</b><span>No mileage</span></div>
+         </div>
+       </div>
+
+       <div><label class="f" for="x-notes">What did you do?</label>
+         <textarea class="inp" id="x-notes">${esc(e.notes)}</textarea></div>`,
+
+      `<button class="btn" id="x-del" style="color:#c0392b;margin-right:auto">Delete Entry</button>
+       <button class="btn" onclick="UI.closeModal()">Cancel</button>
+       <button class="btn accent" id="x-save">Save Changes</button>`);
+
+    const $ = i => document.getElementById(i);
+
+    const recalc = () => {
+      const m = T.mins($("x-start").value, $("x-end").value);
+      if(m !== null && m !== 0){
+        $("x-hours").value = hFmt(T.round(m, DB.s.round) / 60);
+        $("x-tnote").textContent = "Recalculated from " + T.label($("x-start").value) + " – " + T.label($("x-end").value) + " (" + T.span(m) + " actual)";
+      }
+    };
+    $("x-start").addEventListener("input", recalc);
+    $("x-end").addEventListener("input", recalc);
+
+    const paintM = () => {
+      const a = $("x-ms").value === "" ? null : Number($("x-ms").value);
+      const b = $("x-me").value === "" ? null : Number($("x-me").value);
+      const box = $("x-mcalc");
+      if(a === null || b === null){ box.className="calc"; box.innerHTML = "<b>—</b><span>No mileage</span>"; return; }
+      if(b < a){ box.className="calc"; box.innerHTML = "<b style='font-size:13px;color:#c0392b'>End below start</b><span>Check readings</span>"; return; }
+      box.className = "calc live";
+      box.innerHTML = "<b class='tnum'>" + MI.fmt(b-a) + " mi</b><span>driven</span>";
+    };
+    $("x-ms").addEventListener("input", paintM);
+    $("x-me").addEventListener("input", paintM);
+    paintM();
+
+    $("x-del").onclick = ()=>{
+      if(!confirm("Delete this entry? This can't be undone.")) return;
+      DB.remove(id); this.closeModal(); this.toast("Entry deleted"); this.render();
+    };
+
+    $("x-save").onclick = ()=>{
+      const client = $("x-client").value.trim();
+      const date   = $("x-date").value;
+      const hours  = parseFloat($("x-hours").value);
+      const notes  = $("x-notes").value.trim();
+      if(!client || !date || !hours || !notes){ this.toast("Client, date, hours and notes are required"); return; }
+
+      const ms = $("x-ms").value === "" ? null : Number($("x-ms").value);
+      const me = $("x-me").value === "" ? null : Number($("x-me").value);
+      if(ms !== null && me !== null && me < ms){ this.toast("End odometer is below start"); return; }
+
+      DB.update(id, {
+        client, work_date:date, hours, notes,
+        address: $("x-addr").value.trim(),
+        start_time: $("x-start").value, end_time: $("x-end").value,
+        miles_start: ms, miles_end: me
+      });
+      this.closeModal(); this.toast("Entry updated"); this.render();
     };
   },
 
@@ -1190,13 +1302,11 @@ const UI = {
           <div class="meta"><b>${hl(e.client)}</b><span>${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}${T.range(e.start_time,e.end_time)?`<br>${esc(T.range(e.start_time,e.end_time))}`:""}${MI.of(e)?`<br>${MI.fmt(MI.of(e))} mi`:""}</span></div>
           <div class="txt">${e.address?`<div class="times" style="margin-bottom:4px">${hl(e.address)}</div>`:""}${hl(e.notes)}</div>
           <div class="hh tnum">${hFmt(e.hours)}h</div>
-          <button class="btn ghost sm" data-del="${e.id}">✕</button>
+          <button class="btn ghost sm" data-edit="${e.id}">Edit</button>
         </div>`).join("")
         : `<div class="empty"><b>Nothing found</b>${term?`No entries match “${esc(term)}”.`:"Log your first job to build history."}</div>`;
 
-      document.querySelectorAll("#rl [data-del]").forEach(b => b.onclick = ()=>{
-        if(confirm("Delete this entry?")){ DB.remove(b.dataset.del); run(); this.toast("Entry deleted"); }
-      });
+      document.querySelectorAll("#rl [data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
     };
     q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run);
     document.getElementById("csv").onclick = ()=>{
