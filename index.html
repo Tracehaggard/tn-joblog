@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02c">
+<meta name="build" content="2026-08-02d">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -134,7 +134,21 @@ textarea.inp{resize:vertical;min-height:92px;line-height:1.5}
 .chip:hover{border-color:var(--ink-2)}
 .chip.on{background:var(--accent-soft);border-color:#f0c3a1;color:#9a3a05}
 
-.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:20px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:20px}
+
+/* billing status pills */
+.pill{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;
+  font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  border:1px solid;white-space:nowrap;
+}
+.pill.unbilled{background:#fff;border-color:#d9dde3;color:#6b7280}
+.pill.partial {background:#fff7ed;border-color:#f0c3a1;color:#9a3a05}
+.pill.billed  {background:#ecfdf3;border-color:#a7e0c0;color:#137a4f}
+.pill i{width:6px;height:6px;border-radius:50%;background:currentColor;display:block}
+button.pill{cursor:pointer}
+button.pill:hover{filter:brightness(.96)}
+.stat.warn .v{color:var(--accent)}
 .stat{background:var(--paper);padding:15px 18px}
 .stat .k{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650}
 .stat .v{font-size:26px;font-weight:660;letter-spacing:-.03em;margin-top:5px}
@@ -515,6 +529,7 @@ const DB = {
       miles_start: e.milesStart === "" || e.milesStart == null ? null : Number(e.milesStart),
       miles_end:   e.milesEnd   === "" || e.milesEnd   == null ? null : Number(e.milesEnd),
       notes: e.notes.trim(), person: this.s.person || "",
+      billed: e.billed || "unbilled",
       updated_at: new Date().toISOString(), deleted: false
     };
     this.s.entries.push(row); this.save(); Cloud.push([row]);
@@ -584,6 +599,7 @@ const DB = {
       visits: list.length,
       hours:  list.reduce((s,e)=> s + Number(e.hours), 0),
       miles:  list.reduce((s,e)=> s + MI.of(e), 0),
+      open:   BILL.openHours(list),
       last:   list.length ? list[0].work_date : "",
       first:  list.length ? list[list.length-1].work_date : "",
       list
@@ -670,7 +686,8 @@ const Cloud = {
         address:x.address||"",
         miles_start: x.miles_start==null ? null : Number(x.miles_start),
         miles_end:   x.miles_end==null   ? null : Number(x.miles_end),
-        notes:x.notes||"", person:x.person||"", updated_at:x.updated_at||"", deleted:!!x.deleted
+        notes:x.notes||"", person:x.person||"", billed:x.billed||"unbilled",
+        updated_at:x.updated_at||"", deleted:!!x.deleted
       })));
       this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
       return n;
@@ -742,6 +759,22 @@ const T = {
     return new Date(2000,0,1,h,m).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
   },
   range(a,b){ return (a&&b) ? T.label(a)+" – "+T.label(b) : ""; }
+};
+
+/* billing status */
+const BILL = {
+  order: ["unbilled","partial","billed"],
+  label: { unbilled:"Unbilled", partial:"Partial", billed:"Billed" },
+  of(e){ return BILL.order.includes(e.billed) ? e.billed : "unbilled"; },
+  next(s){ return BILL.order[(BILL.order.indexOf(s) + 1) % BILL.order.length]; },
+  pill(e, clickable){
+    const s = BILL.of(e);
+    const tag = clickable ? "button" : "span";
+    const attr = clickable ? ` data-bill="${e.id}" title="Click to change"` : "";
+    return `<${tag} class="pill ${s}"${attr}><i></i>${BILL.label[s]}</${tag}>`;
+  },
+  /* hours that still need invoicing (partial counts as outstanding) */
+  openHours(list){ return list.filter(e => BILL.of(e) !== "billed").reduce((s,e)=> s + Number(e.hours), 0); }
 };
 
 /* odometer helpers */
@@ -931,9 +964,19 @@ const UI = {
                 </div>
               </div>
 
-              <div class="mb">
-                <label class="f" for="i-address">Address <span style="font-weight:500;color:var(--ink-3)">— optional, remembered per client</span></label>
-                <input class="inp" id="i-address" placeholder="1420 Campbell St, Nashville TN" autocomplete="off" value="${esc(pre.address||"")}">
+              <div class="grid2 mb">
+                <div>
+                  <label class="f" for="i-address">Address <span style="font-weight:500;color:var(--ink-3)">— optional</span></label>
+                  <input class="inp" id="i-address" placeholder="1420 Campbell St, Nashville TN" autocomplete="off" value="${esc(pre.address||"")}">
+                </div>
+                <div>
+                  <label class="f" for="i-billed">Billing</label>
+                  <select class="inp" id="i-billed">
+                    <option value="unbilled">Unbilled</option>
+                    <option value="partial">Partially Billed</option>
+                    <option value="billed">Billed</option>
+                  </select>
+                </div>
               </div>
 
               <div class="mb">
@@ -1132,7 +1175,8 @@ const UI = {
       const drove = (mStart !== "" && mEnd !== "") ? mEnd - mStart : 0;
 
       DB.add({ client, date, hours:h, notes, start:s, end:e,
-               address: addr.value, milesStart:mStart, milesEnd:mEnd });
+               address: addr.value, milesStart:mStart, milesEnd:mEnd,
+               billed: document.getElementById("i-billed").value });
       this.toast("Saved — " + client + " · " + hFmt(h) + "h" + (drove ? " · " + MI.fmt(drove) + " mi" : ""));
       this.render();
       document.getElementById("i-client").focus();
@@ -1234,6 +1278,7 @@ const UI = {
         <div class="stat"><div class="k">Days Worked</div><div class="v tnum">${w.days}</div></div>
         <div class="stat"><div class="k">Avg / Day</div><div class="v tnum">${w.days? hFmt(w.total/w.days):"0"}<small> h</small></div></div>
         <div class="stat"><div class="k">Miles Driven</div><div class="v tnum">${MI.fmt(w.miles)}<small> mi</small></div></div>
+        <div class="stat${BILL.openHours(w.rows)?" warn":""}"><div class="k">Not Yet Billed</div><div class="v tnum">${hFmt(BILL.openHours(w.rows))}<small> h</small></div></div>
       </div>
       <div class="panel">
         <div class="panel-h"><h2>By Client</h2><span class="hint" style="margin:0">Click a client to expand</span></div>
@@ -1248,12 +1293,16 @@ const UI = {
               <span class="hr tnum">${hFmt(g.hours)}h</span>
             </button>
             <div class="grp-b">
-              <button class="btn sm noprint" data-open="${esc(g.name)}" style="margin:6px 0 2px">View ${esc(g.name)}'s full file →</button>
+              <div class="noprint" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px">
+                <button class="btn sm" data-open="${esc(g.name)}">View ${esc(g.name)}'s full file →</button>
+                ${BILL.openHours(g.list) ? `<button class="btn sm" data-billall="${esc(g.name)}">Mark all ${hFmt(BILL.openHours(g.list))}h billed</button>` : ""}
+              </div>
               ${g.list.map(e=>`
                 <div class="ent">
                   <div class="d">${esc(D.dayLbl(e.work_date))}${T.range(e.start_time,e.end_time)?`<div class="times" style="font-weight:500;margin-top:2px">${esc(T.range(e.start_time,e.end_time))}</div>`:""}</div>
                   <div class="n">${esc(e.notes)}${e.person?`<span style="color:var(--ink-3);font-size:12px"> — ${esc(e.person)}</span>`:""}${MI.of(e)?`<div class="times" style="margin-top:3px">${MI.fmt(MI.of(e))} mi &nbsp;<span style="font-weight:400">(${MI.fmt(e.miles_start)} → ${MI.fmt(e.miles_end)})</span></div>`:""}</div>
                   <div class="h tnum">${hFmt(e.hours)}h</div>
+                  ${BILL.pill(e, true)}
                   <button class="x noprint" data-edit="${e.id}" title="Edit">Edit</button>
                 </div>`).join("")}
             </div>
@@ -1272,6 +1321,27 @@ const UI = {
     v.querySelectorAll(".grp-h").forEach(b => b.onclick = ()=> b.parentElement.classList.toggle("open"));
     v.querySelectorAll("[data-edit]").forEach(b => b.onclick = e => {
       e.stopPropagation(); this.editEntry(b.dataset.edit);
+    });
+    /* click a pill to cycle Unbilled → Partial → Billed */
+    v.querySelectorAll("[data-bill]").forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      const row = DB.s.entries.find(x => x.id === b.dataset.bill);
+      if(!row) return;
+      const next = BILL.next(BILL.of(row));
+      DB.update(row.id, { billed: next });
+      this.toast(row.client + " — " + BILL.label[next]);
+      this.render();
+    });
+    v.querySelectorAll("[data-billall]").forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      const name = b.dataset.billall;
+      const open = w.groups.find(g => g.name === name);
+      if(!open) return;
+      const todo = open.list.filter(x => BILL.of(x) !== "billed");
+      if(!confirm(`Mark all ${todo.length} ${name} entr${todo.length===1?"y":"ies"} this week as billed?`)) return;
+      todo.forEach(x => DB.update(x.id, { billed:"billed" }));
+      this.toast(name + " marked billed");
+      this.render();
     });
     v.querySelectorAll("[data-open]").forEach(b => b.onclick = e => {
       e.stopPropagation();
@@ -1298,7 +1368,8 @@ const UI = {
         const rng = T.range(e.start_time, e.end_time);
         const mi  = MI.of(e) ? " [" + MI.fmt(MI.of(e)) + " mi]" : "";
         const wh  = (!this.who && e.person) ? " {" + e.person + "}" : "";
-        L.push("  " + D.dayLbl(e.work_date) + (rng ? " " + rng : "") + " (" + hFmt(e.hours) + "h)" + mi + wh + " " + e.notes.replace(/\s*\n\s*/g," "));
+        const bl  = BILL.of(e) === "billed" ? "" : " *" + BILL.label[BILL.of(e)].toUpperCase() + "*";
+        L.push("  " + D.dayLbl(e.work_date) + (rng ? " " + rng : "") + " (" + hFmt(e.hours) + "h)" + mi + wh + bl + " " + e.notes.replace(/\s*\n\s*/g," "));
       });
       L.push("");
     });
@@ -1331,7 +1402,7 @@ const UI = {
         <div class="nums">
           <div>Visits<b class="tnum">${c.visits}</b></div>
           <div>Hours<b class="tnum">${hFmt(c.hours)}</b></div>
-          <div>Miles<b class="tnum">${MI.fmt(c.miles)}</b></div>
+          <div>To Bill<b class="tnum" style="${c.open?"color:var(--accent)":""}">${hFmt(c.open)}</b></div>
         </div>
         <div style="font-size:12px;color:var(--ink-3);margin-top:10px">
           ${c.last ? "Last visit " + esc(D.dayLbl(c.last)) : "No visits logged yet"}
@@ -1348,7 +1419,8 @@ const UI = {
     const c = DB.getClient(name) || { name, address:"", phone:"", contact:"", note:"" };
     const st = DB.statsFor(name);
 
-    this.head(c.name, st.visits ? st.visits + " visits · " + hFmt(st.hours) + " hours · " + MI.fmt(st.miles) + " miles" : "No visits logged yet",
+    this.head(c.name, st.visits ? st.visits + " visits · " + hFmt(st.hours) + " hours · " + MI.fmt(st.miles) + " miles"
+                        + (st.open ? " · " + hFmt(st.open) + "h to bill" : " · all billed") : "No visits logged yet",
       `<button class="btn" id="cBack">← All Clients</button>
        <button class="btn" id="cEdit" style="margin-left:8px">Edit Details</button>
        <button class="btn dark" id="cLog" style="margin-left:8px">Log a Job Here</button>`);
@@ -1389,6 +1461,7 @@ const UI = {
                 </div>
                 <div class="txt">${esc(e.notes)}</div>
                 <div class="hh tnum">${hFmt(e.hours)}h</div>
+                ${BILL.pill(e, false)}
                 <button class="btn ghost sm" data-edit="${e.id}">Edit</button>
               </div>`).join("")
             : `<div class="empty"><b>Nothing logged here yet</b>Jobs you save for ${esc(c.name)} will stack up here.</div>`}
@@ -1476,6 +1549,11 @@ const UI = {
            <datalist id="xpp">${DB.people().map(p=>`<option value="${esc(p)}">`).join("")}</datalist></div>
        </div>
 
+       <div class="mb"><label class="f" for="x-billed">Billing</label>
+         <select class="inp" id="x-billed" style="max-width:240px">
+           ${BILL.order.map(s=>`<option value="${s}"${BILL.of(e)===s?" selected":""}>${s==="partial"?"Partially Billed":BILL.label[s]}</option>`).join("")}
+         </select></div>
+
        <div class="mb">
          <label class="f">Time</label>
          <div class="timerow">
@@ -1552,6 +1630,7 @@ const UI = {
         client, work_date:date, hours, notes,
         address: $("x-addr").value.trim(),
         person: $("x-person").value.trim(),
+        billed: $("x-billed").value,
         start_time: $("x-start").value, end_time: $("x-end").value,
         miles_start: ms, miles_end: me
       });
@@ -1600,6 +1679,14 @@ const UI = {
               <select class="inp" id="qc"><option value="">All clients</option>${cl.map(c=>`<option>${esc(c)}</option>`).join("")}</select></div>
             <div class="col"><label class="f" for="qp">Who</label>
               <select class="inp" id="qp"><option value="">Everyone</option>${DB.people().map(p=>`<option>${esc(p)}</option>`).join("")}</select></div>
+            <div class="col"><label class="f" for="qb">Billing</label>
+              <select class="inp" id="qb">
+                <option value="">Any status</option>
+                <option value="open">Needs billing</option>
+                <option value="unbilled">Unbilled</option>
+                <option value="partial">Partially billed</option>
+                <option value="billed">Billed</option>
+              </select></div>
             <div class="col"><label class="f" for="qs">Sort</label>
               <select class="inp" id="qs"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="hrs">Most hours</option></select></div>
           </div>
@@ -1612,12 +1699,14 @@ const UI = {
   },
 
   wireFind(){
-    const q=document.getElementById("q"), qc=document.getElementById("qc"), qs=document.getElementById("qs"), qp=document.getElementById("qp");
+    const q=document.getElementById("q"), qc=document.getElementById("qc"), qs=document.getElementById("qs"),
+          qp=document.getElementById("qp"), qb=document.getElementById("qb");
     const run = ()=>{
-      const term=q.value.trim().toLowerCase(), cli=qc.value, sort=qs.value, per=qp.value;
+      const term=q.value.trim().toLowerCase(), cli=qc.value, sort=qs.value, per=qp.value, bill=qb.value;
       let rows = DB.live();
       if(cli) rows = rows.filter(e=>e.client===cli);
       if(per) rows = rows.filter(e=>(e.person||"").trim().toLowerCase()===per.toLowerCase());
+      if(bill) rows = rows.filter(e => bill==="open" ? BILL.of(e)!=="billed" : BILL.of(e)===bill);
       if(term) rows = rows.filter(e=> (e.client+" "+e.notes+" "+(e.person||"")+" "+(e.address||"")).toLowerCase().includes(term));
       rows.sort((a,b)=> sort==="hrs" ? b.hours-a.hours : sort==="old" ? a.work_date.localeCompare(b.work_date) : b.work_date.localeCompare(a.work_date));
 
@@ -1626,25 +1715,36 @@ const UI = {
 
       const total = rows.reduce((s,e)=>s+Number(e.hours),0);
       const miles = rows.reduce((s,e)=>s+MI.of(e),0);
-      document.getElementById("rc").textContent = rows.length + " entr" + (rows.length===1?"y":"ies") + " · " + hFmt(total) + "h" + (miles? " · "+MI.fmt(miles)+" mi" : "");
+      const open = BILL.openHours(rows);
+      document.getElementById("rc").textContent = rows.length + " entr" + (rows.length===1?"y":"ies") + " · " + hFmt(total) + "h"
+        + (miles? " · "+MI.fmt(miles)+" mi" : "") + (open? " · " + hFmt(open) + "h to bill" : "");
       document.getElementById("rl").innerHTML = rows.length ? rows.map(e=>`
         <div class="res">
           <div class="meta"><b>${hl(e.client)}</b><span>${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}${T.range(e.start_time,e.end_time)?`<br>${esc(T.range(e.start_time,e.end_time))}`:""}${MI.of(e)?`<br>${MI.fmt(MI.of(e))} mi`:""}</span></div>
           <div class="txt">${e.address?`<div class="times" style="margin-bottom:4px">${hl(e.address)}</div>`:""}${hl(e.notes)}</div>
           <div class="hh tnum">${hFmt(e.hours)}h</div>
+          ${BILL.pill(e, true)}
           <button class="btn ghost sm" data-edit="${e.id}">Edit</button>
         </div>`).join("")
         : `<div class="empty"><b>Nothing found</b>${term?`No entries match “${esc(term)}”.`:"Log your first job to build history."}</div>`;
 
       document.querySelectorAll("#rl [data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
+      document.querySelectorAll("#rl [data-bill]").forEach(b => b.onclick = ()=>{
+        const row = DB.s.entries.find(x => x.id === b.dataset.bill);
+        if(!row) return;
+        const next = BILL.next(BILL.of(row));
+        DB.update(row.id, { billed: next });
+        this.toast(row.client + " — " + BILL.label[next]);
+        run();
+      });
     };
     q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run); qp.addEventListener("change",run);
     document.getElementById("csv").onclick = ()=>{
       const rows = DB.live().slice().sort((a,b)=>a.work_date.localeCompare(b.work_date));
-      const csv = ["Date,Client,Address,Start,End,Hours,Miles Start,Miles End,Miles Driven,Logged By,Notes"].concat(rows.map(e =>
+      const csv = ["Date,Client,Address,Start,End,Hours,Miles Start,Miles End,Miles Driven,Billing,Logged By,Notes"].concat(rows.map(e =>
         [e.work_date, e.client, e.address||"", T.label(e.start_time), T.label(e.end_time), e.hours,
          e.miles_start==null?"":e.miles_start, e.miles_end==null?"":e.miles_end, MI.of(e)||"",
-         e.person||"", e.notes]
+         BILL.label[BILL.of(e)], e.person||"", e.notes]
           .map(x=>`"${String(x).replace(/"/g,'""')}"`).join(",")
       )).join("\n");
       const a=document.createElement("a");
