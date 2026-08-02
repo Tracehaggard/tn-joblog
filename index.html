@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02k">
+<meta name="build" content="2026-08-02l">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -1635,11 +1635,14 @@ const UI = {
         const yr = RATE.total(RATE.between(yStart, today));
         const subsMo = DB.liveSubs().filter(s=>s.active).reduce((t,s)=> t + SUB.monthly(s), 0);
         const unpriced = w.rows.filter(e => !RATE.of(e)).length;
-        if(!wk && !mo && !yr && !subsMo) return "";
+        if(!wk && !mo && !yr && !subsMo && !DB.live().length) return "";
         return `
         <div class="panel mb noprint">
           <div class="panel-h"><h2>Money</h2>
-            ${unpriced?`<span class="hint" style="margin:0;color:var(--accent)">${unpriced} job${unpriced===1?"":"s"} this week with no rate</span>`:""}</div>
+            <span style="display:flex;align-items:center;gap:10px">
+              ${unpriced?`<span class="hint" style="margin:0;color:var(--accent)">${unpriced} job${unpriced===1?"":"s"} this week with no rate</span>`:""}
+              <button class="btn sm" id="bulkRateBtn">Set Rates</button>
+            </span></div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;background:var(--line-2)">
             <div style="background:#fff;padding:15px 18px">
               <div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650">Labor · This Week</div>
@@ -1702,6 +1705,8 @@ const UI = {
       e.stopPropagation(); this.editEntry(b.dataset.edit);
     });
     BILL.wire(v, ()=> this.render());
+    const brb = document.getElementById("bulkRateBtn");
+    if(brb) brb.onclick = ()=> this.bulkRate();
     const bs = document.getElementById("billSeg");
     if(bs) bs.querySelectorAll("button").forEach(b => b.onclick = ()=>{ this.bill = b.dataset.b; this.render(); });
     v.querySelectorAll("[data-billall]").forEach(b => b.onclick = e => {
@@ -2150,6 +2155,79 @@ const UI = {
     };
   },
 
+  /* ---------- APPLY A RATE TO MANY PAST JOBS ---------- */
+  bulkRate(){
+    const now = new Date();
+    const ranges = {
+      week:  [D.iso(D.weekStart(now, DB.s.weekStart)), D.today()],
+      month: [D.iso(new Date(now.getFullYear(), now.getMonth(), 1)), D.today()],
+      year:  [D.iso(new Date(now.getFullYear(), 0, 1)), D.today()],
+      all:   ["0000-01-01", "9999-12-31"]
+    };
+
+    this.modal("Set Hourly Rate on Past Jobs",
+      `<div class="grid2 mb">
+         <div><label class="f" for="bk-rate">Hourly rate</label>
+           <input class="inp tnum" id="bk-rate" type="number" step="1" min="0" value="${DB.s.rate||""}" placeholder="95"></div>
+         <div><label class="f" for="bk-scope">Apply to</label>
+           <select class="inp" id="bk-scope">
+             <option value="week">This week</option>
+             <option value="month">This month</option>
+             <option value="year" selected>This year</option>
+             <option value="all">Everything</option>
+           </select></div>
+       </div>
+       <div class="mb"><label class="f" for="bk-client">Client</label>
+         <select class="inp" id="bk-client">
+           <option value="">All clients</option>
+           ${DB.clientList().map(c=>`<option>${esc(c.name)}</option>`).join("")}
+         </select></div>
+       <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink-2);cursor:pointer;margin-bottom:12px">
+         <input type="checkbox" id="bk-only" checked style="width:15px;height:15px">
+         Only jobs that don't have a rate yet
+       </label>
+       <div class="calc" id="bk-calc" style="min-width:0"></div>
+       <p class="hint">Leaving the box ticked is the safe choice — it won't overwrite rates you've already set.</p>`,
+      `<button class="btn" onclick="UI.closeModal()">Cancel</button>
+       <button class="btn accent" id="bk-go">Apply Rate</button>`);
+
+    const $ = i => document.getElementById(i);
+    const targets = () => {
+      const [a,b] = ranges[$("bk-scope").value];
+      const cli = $("bk-client").value;
+      return DB.live().filter(e =>
+        e.work_date >= a && e.work_date <= b &&
+        (!cli || e.client === cli) &&
+        (!$("bk-only").checked || !RATE.of(e)));
+    };
+    const paint = () => {
+      const r = Number($("bk-rate").value||0), list = targets();
+      const hrs = list.reduce((t,e)=> t + Number(e.hours||0), 0);
+      $("bk-calc").className = "calc" + (r && list.length ? " live" : "");
+      $("bk-calc").innerHTML = list.length
+        ? `<b class="tnum">${list.length} job${list.length===1?"":"s"}${r?` · ${$m(hrs*r)}`:""}</b><span>${hFmt(hrs)} hours${r?` × ${$m(r)}/hr`:" — enter a rate"}</span>`
+        : `<b>—</b><span>No jobs match that</span>`;
+    };
+    ["bk-rate","bk-scope","bk-client","bk-only"].forEach(i => {
+      $(i).addEventListener("input", paint); $(i).addEventListener("change", paint);
+    });
+    paint();
+
+    $("bk-go").onclick = ()=>{
+      const r = Number($("bk-rate").value||0);
+      if(!r){ this.toast("Enter an hourly rate"); return; }
+      const list = targets();
+      if(!list.length){ this.toast("No jobs match that"); return; }
+      const hrs = list.reduce((t,e)=> t + Number(e.hours||0), 0);
+      if(!confirm(`Set ${$m(r)}/hr on ${list.length} job${list.length===1?"":"s"}?\n\n${hFmt(hrs)} hours → ${$m(hrs*r)}`)) return;
+      list.forEach(e => DB.update(e.id, { rate: r }));
+      DB.s.rate = r; DB.save();
+      this.closeModal();
+      this.toast(list.length + " jobs priced — " + $m(hrs*r));
+      this.render();
+    };
+  },
+
   /* ---------- EDIT AN ENTRY ---------- */
   editEntry(id){
     const e = DB.s.entries.find(x => x.id === id);
@@ -2188,6 +2266,9 @@ const UI = {
              <input class="inp" id="x-end" type="time" value="${esc(e.end_time||"")}" style="width:132px"></div>
            <div class="tf"><label class="f" for="x-hours" style="font-size:11px">Hours billed</label>
              <input class="inp tnum" id="x-hours" type="number" step="0.25" min="0" value="${e.hours}" style="width:118px"></div>
+           <div class="tf"><label class="f" for="x-rate" style="font-size:11px">Rate / hr</label>
+             <input class="inp tnum" id="x-rate" type="number" step="1" min="0" value="${RATE.of(e)||""}" placeholder="${DB.s.rate||0}" style="width:110px"></div>
+           <div class="calc" id="x-money" style="min-width:160px"></div>
          </div>
          <div class="hint" id="x-tnote">Change the times and the hours recalculate. Or just type the hours directly.</div>
        </div>
@@ -2278,7 +2359,7 @@ const UI = {
         ? `<b class="tnum">${$m(hrs*rt)}</b><span>${hFmt(hrs)} h × ${$m(rt)}</span>`
         : `<b>—</b><span>No rate set</span>`;
     };
-    ["x-hours","x-rate","x-start","x-end"].forEach(i => $(i).addEventListener("input", paintVal));
+    ["x-hours","x-rate","x-start","x-end"].forEach(i => { const el = $(i); if(el) el.addEventListener("input", paintVal); });
     paintVal();
 
     const paintM = () => {
@@ -2359,7 +2440,7 @@ const UI = {
       DB.update(id, {
         client, work_date:date, hours, notes,
         sub_id: newSubId || e.sub_id || null,
-        rate: Number($("x-rate").value || 0),
+        rate: $("x-rate") ? Number($("x-rate").value || 0) : RATE.of(e),
         address: $("x-addr").value.trim(),
         person: $("x-person").value.trim(),
         billed: $("x-billed").value,
