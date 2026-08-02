@@ -6,7 +6,11 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-01h">
+<meta name="build" content="2026-08-02a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Job Log">
+<meta name="mobile-web-app-capable" content="yes">
 <title>TN Info Tech — Job Log</title>
 <style>
 :root{
@@ -224,20 +228,96 @@ ol.steps li{margin-bottom:9px}
 
 @media(max-width:860px){
   .rail{display:none}
-  .mobtop{display:flex;position:sticky;top:0;z-index:50;background:var(--rail);color:#fff;padding:10px 14px;gap:6px;align-items:center;overflow-x:auto}
-  .mobtop b{font-size:12px;letter-spacing:.12em;margin-right:6px;white-space:nowrap}
-  .mobtop button{color:#a8afba;font-size:13px;font-weight:600;padding:6px 10px;border-radius:6px;white-space:nowrap}
-  .mobtop button.on{background:rgba(255,255,255,.12);color:#fff}
-  .top{padding:14px 16px}
-  .wrap{padding:16px 16px 50px}
+
+  /* ---- bottom tab bar, thumb height ---- */
+  .mobtop{
+    display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;
+    background:var(--rail);color:#fff;align-items:stretch;justify-content:space-around;
+    padding:0 4px calc(env(safe-area-inset-bottom, 0px));
+    box-shadow:0 -1px 0 rgba(255,255,255,.08), 0 -8px 24px rgba(0,0,0,.18);
+  }
+  .mobtop b{display:none}
+  .mobtop button{
+    flex:1;color:#8b929d;font-size:11px;font-weight:650;letter-spacing:.01em;
+    padding:11px 2px 9px;border-radius:0;display:flex;flex-direction:column;
+    align-items:center;gap:5px;white-space:nowrap;position:relative;
+  }
+  .mobtop button::before{
+    content:"";width:19px;height:19px;border-radius:5px;
+    border:2px solid currentColor;opacity:.85;
+  }
+  .mobtop button[data-v="log"]::before{border-radius:50%}
+  .mobtop button[data-v="week"]::before{border-radius:3px;border-width:2px 2px 6px 2px}
+  .mobtop button[data-v="clients"]::before{border-radius:50% 50% 6px 6px}
+  .mobtop button[data-v="find"]::before{border-radius:50%;border-width:3px}
+  .mobtop button[data-v="set"]::before{border-radius:4px;border-style:dashed}
+  .mobtop button.on{color:#fff}
+  .mobtop button.on::after{
+    content:"";position:absolute;top:0;left:22%;right:22%;height:2.5px;
+    background:var(--accent);border-radius:0 0 3px 3px;
+  }
+
+  /* header + page */
+  .top{padding:14px 16px 12px;position:sticky;top:0;z-index:40}
+  .top h1{font-size:19px}
+  .top > div:last-child{width:100%}
+  .wrap{padding:14px 14px calc(96px + env(safe-area-inset-bottom, 0px))}
+
+  /* forms: 16px stops iOS from zooming on focus */
+  .inp{font-size:16px;padding:12px 13px}
+  textarea.inp{min-height:120px}
+  label.f{font-size:12.5px}
+  .btn{padding:11px 15px;font-size:14.5px}
+  .btn.sm{padding:9px 12px;font-size:13px}
+  .chip{padding:9px 14px;font-size:14px}
+  .seg button{padding:9px 14px;font-size:13.5px}
+
+  /* the primary action rides just above the tab bar */
+  .btn.accent[type="submit"]{
+    position:sticky;bottom:calc(78px + env(safe-area-inset-bottom, 0px));
+    box-shadow:0 6px 18px rgba(232,89,12,.28);padding:14px;font-size:15.5px;
+  }
+
+  .panel{border-radius:10px}
+  .panel-b{padding:16px}
+  .panel-h{padding:13px 16px}
+
   .stats{grid-template-columns:1fr 1fr}
+  .stat{padding:13px 15px}
+  .stat .v{font-size:23px}
   .grid2{grid-template-columns:1fr}
+
+  /* time + odometer rows stack cleanly */
+  .timerow{gap:12px}
+  .timerow .tf{flex:1 1 calc(50% - 6px)}
+  .timerow .tf .inp{width:100%}
+  .calc{flex:1 1 100%;min-width:0}
+
+  /* week report rows */
+  .grp-h{padding:14px 16px;gap:10px}
   .grp-h .ct,.bar{display:none}
-  .grp-b{padding-left:18px}
-  .ent{flex-wrap:wrap}
-  .ent .d{flex:0 0 auto}
-  .res{flex-wrap:wrap}
-  .res .meta{flex:0 0 auto}
+  .grp-h .nm{font-size:15px}
+  .grp-b{padding:2px 16px 14px 16px}
+  .ent{flex-wrap:wrap;gap:8px}
+  .ent .d{flex:0 0 auto;font-size:12px}
+  .ent .n{flex:1 1 100%;order:3}
+  .ent .h{margin-left:auto}
+  .ent .x{opacity:1;order:4;margin-left:auto}
+
+  .res{flex-wrap:wrap;gap:8px;padding:14px 16px}
+  .res .meta{flex:1 1 auto}
+  .res .txt{flex:1 1 100%;order:3}
+  .res .hh{margin-left:auto}
+
+  .cgrid{grid-template-columns:1fr}
+  .kv{grid-template-columns:96px 1fr}
+
+  .modal{margin:0;border-radius:14px 14px 0 0;position:fixed;left:0;right:0;bottom:0;max-width:none}
+  .modal-b{max-height:58vh;padding:18px 16px}
+  .modal-f{padding:14px 16px calc(16px + env(safe-area-inset-bottom, 0px));gap:10px}
+  .modal-f .btn{flex:1;justify-content:center}
+  .mask{padding:0}
+  .toast{bottom:calc(86px + env(safe-area-inset-bottom, 0px));width:auto;max-width:88%;text-align:center}
 }
 @media print{
   .rail,.mobtop,.top,.noprint{display:none!important}
@@ -271,10 +351,10 @@ ol.steps li{margin-bottom:9px}
 
   <div class="mobtop" id="mobnav">
     <b>TN INFO TECH</b>
-    <button data-v="log" class="on">New</button>
+    <button data-v="log" class="on">Log</button>
     <button data-v="week">Week</button>
     <button data-v="clients">Clients</button>
-    <button data-v="find">History</button>
+    <button data-v="find">Search</button>
     <button data-v="set">Settings</button>
   </div>
 
