@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02v">
+<meta name="build" content="2026-08-02w">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -593,6 +593,18 @@ const Auth = {
   }
 };
 
+/* the id columns are Postgres uuid — a non-uuid string gets the row rejected,
+   so the fallback has to produce a real v4, not a timestamp+random string */
+function uuid(){
+  if(typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  const b = new Uint8Array(16);
+  if(typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(b);
+  else for(let i=0;i<16;i++) b[i] = Math.floor(Math.random()*256);
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const s = [...b].map(x=>x.toString(16).padStart(2,"0")).join("");
+  return s.slice(0,8)+"-"+s.slice(8,12)+"-"+s.slice(12,16)+"-"+s.slice(16,20)+"-"+s.slice(20);
+}
+
 const DB = {
   s: { entries: [], clients: {}, subs: [], person: "", url: "", key: "", weekStart: 1, round: 0, mode: "clock", rate: 0, lock: null },
 
@@ -629,7 +641,7 @@ const DB = {
 
   add(e){
     const row = {
-      id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random().toString(16).slice(2)),
+      id: uuid(),
       work_date: e.date, client: e.client.trim(), hours: Number(e.hours),
       start_time: e.start || "", end_time: e.end || "",
       address: (e.address||"").trim(),
@@ -673,7 +685,7 @@ const DB = {
   saveSub(sub){
     const isNew = !sub.id;
     const row = Object.assign({
-      id: isNew ? (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random().toString(16).slice(2)) : sub.id,
+      id: isNew ? uuid() : sub.id,
       deleted: false
     }, sub, { updated_at: new Date().toISOString() });
     if(isNew) this.s.subs.push(row);
@@ -931,22 +943,42 @@ const Cloud = {
       updated_at:r.updated_at||now, deleted:!!r.deleted };
   },
   clean(rows, table){ return rows.map(r => this.shape(r, table)); },
+  async send(rows, table){
+    const r = await fetch(this.base(table), {
+      method:"POST",
+      headers: this.head({ "Prefer":"resolution=merge-duplicates,return=minimal" }),
+      body: JSON.stringify(this.clean(rows, table))
+    });
+    if(!r.ok) throw new Error((await r.text()).slice(0,300));
+    return true;
+  },
   async push(rows, table){
     if(!DB.linked() || !rows.length) return true;
     try{
-      const r = await fetch(this.base(table), {
-        method:"POST",
-        headers: this.head({ "Prefer":"resolution=merge-duplicates,return=minimal" }),
-        body: JSON.stringify(this.clean(rows, table))
-      });
-      if(!r.ok) throw new Error((await r.text()).slice(0,300));
+      await this.send(rows, table);
       this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
-      this.failed = 0;
       return true;
     }catch(err){
-      this.setState("err","Not saved to server");
+      /* One malformed row rejects the whole batch. Retry them one at a time so
+         a single bad record can't hold everyone else's work hostage. */
+      if(rows.length > 1){
+        const bad = [];
+        for(const row of rows){
+          try{ await this.send([row], table); }
+          catch(e){ bad.push({ table: table||"entries", row, msg: (e.message||String(e)) }); }
+        }
+        if(!bad.length){
+          this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
+          return true;
+        }
+        this.badRows = (this.badRows||[]).concat(bad);
+        console.warn("push: rejected rows", bad);
+        this.setState("err","Some rows not saved");
+        this.alarm(bad.length + " record" + (bad.length>1?"s":"") + " rejected — " + bad[0].msg);
+        return false;
+      }
       console.warn("push", table||"entries", err);
-      /* never fail quietly again — losing a save without saying so is the worst thing this app can do */
+      this.setState("err","Not saved to server");
       this.alarm(err && err.message ? err.message : String(err));
       return false;
     }
@@ -961,9 +993,14 @@ const Cloud = {
         "box-shadow:0 2px 12px rgba(0,0,0,.2)";
       document.body.appendChild(b);
     }
-    b.innerHTML = `<b>Didn't save to the server.</b>
-      <span style="opacity:.9">It's still on this device — don't close the tab. Retrying…</span>
-      <button class="btn sm" id="syncRetry" style="margin-left:auto;background:#fff;border-color:#fff;color:#b42318">Retry now</button>
+    let detail = "";
+    try{ const j = JSON.parse((msg||"").replace(/^\d+\s*/,"")); detail = j.message || j.hint || ""; }catch(e){ detail = msg||""; }
+    b.innerHTML = `<div style="flex:1">
+        <b>Didn't save to the server.</b>
+        <span style="opacity:.9">It's still on this device — don't close the tab. Retrying…</span>
+        <div style="opacity:.75;font-size:12px;margin-top:3px;font-family:ui-monospace,Menlo,monospace">${esc(String(detail).slice(0,200))}</div>
+      </div>
+      <button class="btn sm" id="syncRetry" style="background:#fff;border-color:#fff;color:#b42318">Retry now</button>
       <button class="btn sm" id="syncHide" style="background:transparent;border-color:rgba(255,255,255,.5);color:#fff">Hide</button>`;
     document.getElementById("syncRetry").onclick = async ()=>{ await Cloud.pushAll(); };
     document.getElementById("syncHide").onclick = ()=> b.remove();
