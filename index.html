@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02l">
+<meta name="build" content="2026-08-02m">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -145,6 +145,7 @@ textarea.inp{resize:vertical;min-height:92px;line-height:1.5}
 .pill.unbilled{background:#fff;border-color:#d9dde3;color:#6b7280}
 .pill.partial {background:#fff7ed;border-color:#f0c3a1;color:#9a3a05}
 .pill.billed  {background:#ecfdf3;border-color:#a7e0c0;color:#137a4f}
+.pill.nocharge{background:#eef2f7;border-color:#c3ccd9;color:#4a5568}
 .pill i{width:6px;height:6px;border-radius:50%;background:currentColor;display:block}
 
 /* inline billing dropdown */
@@ -161,6 +162,8 @@ textarea.inp{resize:vertical;min-height:92px;line-height:1.5}
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%239a3a05' stroke-width='1.6' fill='none' stroke-linecap='round'/></svg>")}
 .billsel.billed{background-color:#ecfdf3;border-color:#a7e0c0;color:#137a4f;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23137a4f' stroke-width='1.6' fill='none' stroke-linecap='round'/></svg>")}
+.billsel.nocharge{background-color:#eef2f7;border-color:#c3ccd9;color:#4a5568;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%234a5568' stroke-width='1.6' fill='none' stroke-linecap='round'/></svg>")}
 @media(max-width:860px){ .billsel{font-size:13px;padding:8px 26px 8px 12px} }
 .stat.warn .v{color:var(--accent)}
 .stat{background:var(--paper);padding:15px 18px}
@@ -681,6 +684,7 @@ const DB = {
       miles:  list.reduce((s,e)=> s + MI.of(e), 0),
       money:  RATE.total(list),
       open:   BILL.openHours(list),
+      waived: RATE.totalWaived(list),
       last:   list.length ? list[0].work_date : "",
       first:  list.length ? list[list.length-1].work_date : "",
       list
@@ -870,8 +874,12 @@ const $r = n => "$" + Math.round(Number(n||0)).toLocaleString();
 /* labour money */
 const RATE = {
   of(e){ return Number(e.rate || 0); },
-  amount(e){ return Number(e.hours || 0) * RATE.of(e); },
+  /* no-charge work is worth nothing on an invoice */
+  amount(e){ return BILL.free(e) ? 0 : Number(e.hours || 0) * RATE.of(e); },
+  /* what a freebie would have been worth, for tracking goodwill */
+  waived(e){ return BILL.free(e) ? Number(e.hours || 0) * RATE.of(e) : 0; },
   total(list){ return list.reduce((t,e)=> t + RATE.amount(e), 0); },
+  totalWaived(list){ return list.reduce((t,e)=> t + RATE.waived(e), 0); },
   /* entries between two ISO dates, inclusive */
   between(a, b){ return DB.live().filter(e => e.work_date >= a && e.work_date <= b); }
 };
@@ -930,10 +938,13 @@ const SUB = {
 
 /* billing status */
 const BILL = {
-  order: ["unbilled","partial","billed"],
-  label: { unbilled:"Unbilled", partial:"Partial", billed:"Billed" },
+  order: ["unbilled","partial","billed","nocharge"],
+  label: { unbilled:"Unbilled", partial:"Partial", billed:"Billed", nocharge:"No Charge" },
   of(e){ return BILL.order.includes(e.billed) ? e.billed : "unbilled"; },
   next(s){ return BILL.order[(BILL.order.indexOf(s) + 1) % BILL.order.length]; },
+  /* still owed an invoice? no-charge and billed are both settled */
+  open(e){ const s = BILL.of(e); return s !== "billed" && s !== "nocharge"; },
+  free(e){ return BILL.of(e) === "nocharge"; },
   pill(e){
     const s = BILL.of(e);
     return `<span class="pill ${s}"><i></i>${BILL.label[s]}</span>`;
@@ -959,8 +970,9 @@ const BILL = {
       };
     });
   },
-  /* hours that still need invoicing (partial counts as outstanding) */
-  openHours(list){ return list.filter(e => BILL.of(e) !== "billed").reduce((s,e)=> s + Number(e.hours), 0); }
+  /* hours that still need invoicing — partial counts, no-charge doesn't */
+  openHours(list){ return list.filter(BILL.open).reduce((s,e)=> s + Number(e.hours), 0); },
+  freeHours(list){ return list.filter(BILL.free).reduce((s,e)=> s + Number(e.hours), 0); }
 };
 
 /* odometer helpers */
@@ -1163,6 +1175,7 @@ const UI = {
                     <option value="unbilled">Unbilled</option>
                     <option value="partial">Partially Billed</option>
                     <option value="billed">Billed</option>
+                    <option value="nocharge">No Charge</option>
                   </select>
                 </div>
               </div>
@@ -1530,8 +1543,9 @@ const UI = {
 
     /* the outstanding total is always for the whole week, regardless of the billing view */
     const billBase = rows;
-    if(this.bill === "open")   rows = rows.filter(e => BILL.of(e) !== "billed");
+    if(this.bill === "open")   rows = rows.filter(BILL.open);
     if(this.bill === "billed") rows = rows.filter(e => BILL.of(e) === "billed");
+    if(this.bill === "nocharge") rows = rows.filter(BILL.free);
 
     /* per-person breakdown, always computed off the unfiltered week */
     const pm = new Map();
@@ -1598,6 +1612,7 @@ const UI = {
             <button data-b=""${this.bill===""?" class='on'":""}>All</button>
             <button data-b="open"${this.bill==="open"?" class='on'":""}>Needs Billing</button>
             <button data-b="billed"${this.bill==="billed"?" class='on'":""}>Billed</button>
+            <button data-b="nocharge"${this.bill==="nocharge"?" class='on'":""}>No Charge</button>
           </div>
         </div>
       </div>
@@ -1622,6 +1637,7 @@ const UI = {
         <div class="stat"><div class="k">Avg / Day</div><div class="v tnum">${w.days? hFmt(w.total/w.days):"0"}<small> h</small></div></div>
         <div class="stat"><div class="k">Miles Driven</div><div class="v tnum">${MI.fmt(w.miles)}<small> mi</small></div></div>
         <div class="stat${w.openAll?" warn":""}"><div class="k">Not Yet Billed</div><div class="v tnum">${hFmt(w.openAll)}<small> h</small></div></div>
+        ${BILL.freeHours(w.rows)?`<div class="stat"><div class="k">No Charge</div><div class="v tnum" style="color:var(--ink-3)">${hFmt(BILL.freeHours(w.rows))}<small> h</small></div></div>`:""}
         <div class="stat"><div class="k">Labor Billed</div><div class="v tnum">${$r(RATE.total(w.rows))}</div></div>
       </div>
 
@@ -1634,7 +1650,8 @@ const UI = {
         const mo = RATE.total(RATE.between(mStart, today));
         const yr = RATE.total(RATE.between(yStart, today));
         const subsMo = DB.liveSubs().filter(s=>s.active).reduce((t,s)=> t + SUB.monthly(s), 0);
-        const unpriced = w.rows.filter(e => !RATE.of(e)).length;
+        const unpriced = w.rows.filter(e => !RATE.of(e) && !BILL.free(e)).length;
+        const waivedYr = RATE.totalWaived(RATE.between(yStart, today));
         if(!wk && !mo && !yr && !subsMo && !DB.live().length) return "";
         return `
         <div class="panel mb noprint">
@@ -1659,6 +1676,10 @@ const UI = {
             <div style="background:#fafbfc;padding:15px 18px">
               <div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650">Month + Recurring</div>
               <div class="tnum" style="font-size:23px;font-weight:660;margin-top:4px;color:var(--accent)">${$r(mo + subsMo)}</div></div>
+            ${waivedYr ? `
+            <div style="background:#fff;padding:15px 18px">
+              <div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650">No Charge · Year</div>
+              <div class="tnum" style="font-size:23px;font-weight:660;margin-top:4px;color:var(--ink-3)">${$r(waivedYr)}</div></div>` : ""}
           </div>
         </div>`;
       })()}
@@ -1714,7 +1735,7 @@ const UI = {
       const name = b.dataset.billall;
       const open = w.groups.find(g => g.name === name);
       if(!open) return;
-      const todo = open.list.filter(x => BILL.of(x) !== "billed");
+      const todo = open.list.filter(BILL.open);
       if(!confirm(`Mark all ${todo.length} ${name} entr${todo.length===1?"y":"ies"} this week as billed?`)) return;
       todo.forEach(x => DB.update(x.id, { billed:"billed" }));
       this.toast(name + " marked billed");
@@ -2501,6 +2522,7 @@ const UI = {
                 <option value="unbilled">Unbilled</option>
                 <option value="partial">Partially billed</option>
                 <option value="billed">Billed</option>
+                <option value="nocharge">No charge</option>
               </select></div>
             <div class="col"><label class="f" for="qs">Sort</label>
               <select class="inp" id="qs">
@@ -2527,7 +2549,7 @@ const UI = {
       let rows = DB.live();
       if(cli) rows = rows.filter(e=>e.client===cli);
       if(per) rows = rows.filter(e=>(e.person||"").trim().toLowerCase()===per.toLowerCase());
-      if(bill) rows = rows.filter(e => bill==="open" ? BILL.of(e)!=="billed" : BILL.of(e)===bill);
+      if(bill) rows = rows.filter(e => bill==="open" ? BILL.open(e) : BILL.of(e)===bill);
       if(term) rows = rows.filter(e=> (e.client+" "+e.notes+" "+(e.person||"")+" "+(e.address||"")).toLowerCase().includes(term));
       const rank = e => BILL.order.indexOf(BILL.of(e));
       rows.sort((a,b)=>
