@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02t">
+<meta name="build" content="2026-08-02u">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -903,27 +903,41 @@ const Cloud = {
       return n;
     }catch(err){ this.setState("err", "Sync error"); console.warn("pull", err); return 0; }
   },
-  /* Postgres date columns reject "" — an empty date must go up as null,
-     or the whole row is rejected and the save is silently lost. */
-  DATE_COLS: ["work_date","next_due","last_billed"],
-  clean(rows){
-    return rows.map(r => {
-      const o = Object.assign({}, r);
-      /* only touch columns this row actually has — inventing one that the
-         table doesn't define gets the whole request rejected */
-      this.DATE_COLS.forEach(k => {
-        if(Object.prototype.hasOwnProperty.call(o, k) && (o[k] === "" || o[k] === undefined)) o[k] = null;
-      });
-      return o;
-    });
+  /* Every row in a batch must carry exactly the same keys or PostgREST
+     rejects the whole batch, and Postgres date columns reject "".
+     Rows saved before a field existed are missing it, so normalise
+     everything to one fixed shape per table before it goes up. */
+  dt(v){ return (v === "" || v === undefined || v === null) ? null : v; },
+  num(v, d){ const n = Number(v); return isNaN(n) ? d : n; },
+  shape(r, table){
+    const now = new Date().toISOString();
+    if(table === "clients") return {
+      id:r.id, name:r.name||"", address:r.address||"", phone:r.phone||"",
+      contact:r.contact||"", note:r.note||"",
+      updated_at:r.updated_at||now, deleted:!!r.deleted };
+    if(table === "subs") return {
+      id:r.id, client:r.client||"", item:r.item||"",
+      qty:this.num(r.qty,1), unit_price:this.num(r.unit_price,0), unit_cost:this.num(r.unit_cost,0),
+      cycle:r.cycle||"monthly", next_due:this.dt(r.next_due), last_billed:this.dt(r.last_billed),
+      note:r.note||"", active:r.active!==false,
+      updated_at:r.updated_at||now, deleted:!!r.deleted };
+    return {
+      id:r.id, work_date:this.dt(r.work_date), client:r.client||"", hours:this.num(r.hours,0),
+      start_time:r.start_time||"", end_time:r.end_time||"", address:r.address||"",
+      miles_start: (r.miles_start===""||r.miles_start==null) ? null : this.num(r.miles_start,null),
+      miles_end:   (r.miles_end===""  ||r.miles_end==null)   ? null : this.num(r.miles_end,null),
+      notes:r.notes||"", person:r.person||"", billed:r.billed||"unbilled",
+      rate:this.num(r.rate,0), sub_id:r.sub_id||null,
+      updated_at:r.updated_at||now, deleted:!!r.deleted };
   },
+  clean(rows, table){ return rows.map(r => this.shape(r, table)); },
   async push(rows, table){
     if(!DB.linked() || !rows.length) return true;
     try{
       const r = await fetch(this.base(table), {
         method:"POST",
         headers: this.head({ "Prefer":"resolution=merge-duplicates,return=minimal" }),
-        body: JSON.stringify(this.clean(rows))
+        body: JSON.stringify(this.clean(rows, table))
       });
       if(!r.ok) throw new Error((await r.text()).slice(0,300));
       this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
