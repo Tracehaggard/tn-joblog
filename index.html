@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02h">
+<meta name="build" content="2026-08-02i">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -230,6 +230,27 @@ mark{background:#fff2b8;color:inherit;padding:0 1px;border-radius:2px}
 pre.sql{background:#15171b;color:#d6dae0;padding:14px;border-radius:7px;font-family:var(--mono);font-size:11.5px;line-height:1.55;overflow:auto;white-space:pre}
 ol.steps{margin:0 0 4px 18px;font-size:13.5px;color:var(--ink-2)}
 ol.steps li{margin-bottom:9px}
+
+/* subscription rows */
+.subrow{
+  display:flex;align-items:center;gap:14px;
+  padding:12px 18px;border-top:1px solid var(--line-2);
+}
+.subrow:hover{background:#fafbfc}
+.subrow .who{flex:1;min-width:0;margin:0;display:block}
+.subrow .nm2{font-weight:640;font-size:14.5px;letter-spacing:-.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subrow .meta2{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+.subrow .amt{font-weight:680;font-size:15px;text-align:right;flex:0 0 auto;min-width:96px}
+.subrow .amt small{font-weight:600;font-size:11px;color:var(--ink-3)}
+.subrow .act{flex:0 0 auto}
+.subhead{display:flex;align-items:center;gap:14px;padding:13px 18px;background:#fafbfc}
+.subhead .nm2{font-weight:660;font-size:14.5px;flex:1}
+@media(max-width:860px){
+  .subrow{flex-wrap:wrap;gap:8px;padding:14px 16px}
+  .subrow .who{flex:1 1 100%}
+  .subrow .amt{min-width:0;margin-left:auto}
+}
 
 /* client cards + picker */
 .cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}
@@ -802,6 +823,14 @@ const D = {
   addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; },
   short(d){ return d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); },
   dayLbl(s){ const d=D.parse(s); return d.toLocaleDateString(undefined,{weekday:"short",month:"numeric",day:"numeric"}); },
+  /* shows the year whenever it isn't this year — annual renewals need it */
+  due(s){
+    if(!s) return "";
+    const d = D.parse(s), now = new Date();
+    return d.getFullYear() === now.getFullYear()
+      ? d.toLocaleDateString(undefined,{month:"short",day:"numeric"})
+      : d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
+  },
   full(s){ return D.parse(s).toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric",year:"numeric"}); }
 };
 
@@ -1708,7 +1737,7 @@ const UI = {
                     <b style="font-size:13.5px;font-weight:640">${esc(s.item)}</b>
                     <span class="tnum" style="font-size:13px;font-weight:660">${$m(SUB.amount(s))}<span style="font-size:10px;color:var(--ink-3)">${SUB.per[s.cycle]}</span></span>
                   </div>
-                  <div class="times" style="margin-top:3px">${Number(s.qty)} × ${$m(s.unit_price)}${s.next_due?" · next "+esc(D.dayLbl(s.next_due)):""}</div>
+                  <div class="times" style="margin-top:3px">${Number(s.qty)} × ${$m(s.unit_price)}${s.next_due?" · next "+esc(D.due(s.next_due)):""}</div>
                 </div>`).join("")
               : `<div class="empty" style="padding:20px">Nothing recurring for this client.</div>`}
               <div style="padding:12px 18px"><button class="btn sm" id="cSub">+ Add Subscription</button></div>
@@ -1850,14 +1879,14 @@ const UI = {
       <div class="panel mb">
         <div class="panel-h"><h2>Ready to Bill</h2><span class="hint" style="margin:0">${dueSoon.length} due or overdue · ${$m(dueValue)}</span></div>
         ${dueSoon.sort((a,b)=>(a.next_due||"").localeCompare(b.next_due||"")).map(s=>`
-          <div class="res">
-            <div class="meta"><b>${esc(s.client)}</b><span>${esc(s.item)}</span></div>
-            <div class="txt" style="flex:0 1 auto">
-              ${SUB.badge(s)}
-              <span class="times" style="margin-left:8px">due ${esc(D.dayLbl(s.next_due))}</span>
+          <div class="subrow">
+            <div class="who">
+              <div class="nm2">${esc(s.client)}</div>
+              <div class="meta2">${esc(s.item)} · due ${esc(D.due(s.next_due))}</div>
             </div>
-            <div class="hh tnum">${$m(SUB.amount(s))}<span style="font-weight:500;color:var(--ink-3);font-size:12px">${SUB.per[s.cycle]}</span></div>
-            <button class="btn sm accent noprint" data-billsub="${s.id}">Mark Billed</button>
+            ${SUB.badge(s)}
+            <div class="amt tnum">${$m(SUB.amount(s))}<small>${SUB.per[s.cycle]}</small></div>
+            <button class="btn sm accent act noprint" data-billsub="${s.id}">Mark Billed</button>
           </div>`).join("")}
       </div>` : ""}
 
@@ -1874,29 +1903,24 @@ const UI = {
       <div class="panel">
         <div class="panel-h"><h2>All Subscriptions</h2><button class="btn sm" id="sbCsv">Export CSV</button></div>
         ${groups.length ? groups.map(g=>`
-          <div class="grp open">
-            <div class="grp-h" style="cursor:default">
-              <span class="nm">${esc(g.name)}</span>
-              <span class="ct">${g.rows.length} item${g.rows.length===1?"":"s"}</span>
-              <span class="hr tnum">${$r(g.mo)}<span style="font-size:11px;font-weight:600;color:var(--ink-3)">/mo</span></span>
+          <div>
+            <div class="subhead">
+              <span class="nm2">${esc(g.name)}</span>
+              <span class="ct" style="font-size:12px;color:var(--ink-3)">${g.rows.length} item${g.rows.length===1?"":"s"}</span>
+              <span class="tnum" style="font-weight:680;font-size:15px">${$r(g.mo)}<small style="font-size:11px;font-weight:600;color:var(--ink-3)">/mo</small></span>
             </div>
-            <div class="grp-b">
-              ${g.rows.map(s=>`
-                <div class="ent" style="align-items:center">
-                  <div class="n" style="flex:1 1 auto">
-                    <b style="font-weight:640;font-size:14px">${esc(s.item)}</b>
-                    <div class="times" style="font-weight:500;margin-top:2px">
-                      ${Number(s.qty)} × ${$m(s.unit_price)} · ${SUB.label[s.cycle]}
-                      ${s.next_due ? " · next " + esc(D.dayLbl(s.next_due)) : ""}
-                      ${s.last_billed ? " · last billed " + esc(D.dayLbl(s.last_billed)) : ""}
-                    </div>
-                    ${s.note ? `<div class="times" style="font-weight:400;margin-top:3px">${esc(s.note)}</div>` : ""}
+            ${g.rows.map(s=>`
+              <div class="subrow">
+                <div class="who">
+                  <div class="nm2">${esc(s.item)}</div>
+                  <div class="meta2">
+                    ${Number(s.qty)} × ${$m(s.unit_price)} · ${SUB.label[s.cycle]}${s.next_due ? " · next " + esc(D.due(s.next_due)) : ""}${s.last_billed ? " · billed " + esc(D.due(s.last_billed)) : ""}${s.note ? " · " + esc(s.note) : ""}
                   </div>
-                  ${SUB.badge(s)}
-                  <div class="h tnum">${$m(SUB.amount(s))}<span style="font-weight:500;color:var(--ink-3);font-size:11px">${SUB.per[s.cycle]}</span></div>
-                  <button class="x noprint" data-editsub="${s.id}">Edit</button>
-                </div>`).join("")}
-            </div>
+                </div>
+                ${SUB.badge(s)}
+                <div class="amt tnum">${$m(SUB.amount(s))}<small>${SUB.per[s.cycle]}</small></div>
+                <button class="btn ghost sm act noprint" data-editsub="${s.id}">Edit</button>
+              </div>`).join("")}
           </div>`).join("")
         : `<div class="empty"><b>No subscriptions yet</b>Add the Microsoft 365 tenants, backup plans, and anything else you rebill monthly, quarterly, or yearly.</div>`}
       </div>`;
@@ -2079,7 +2103,7 @@ const UI = {
            <div>
              <div style="font-weight:640;font-size:14px">${esc(linked.item)}</div>
              <div class="times" style="margin-top:2px">
-               ${Number(linked.qty)} × ${$m(linked.unit_price)} · ${SUB.label[linked.cycle]}${linked.next_due?" · next "+esc(D.dayLbl(linked.next_due)):""}
+               ${Number(linked.qty)} × ${$m(linked.unit_price)} · ${SUB.label[linked.cycle]}${linked.next_due?" · next "+esc(D.due(linked.next_due)):""}
              </div>
            </div>
            <div style="display:flex;gap:6px">
