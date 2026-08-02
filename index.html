@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-01f">
+<meta name="build" content="2026-08-01g">
 <title>TN Info Tech — Job Log</title>
 <style>
 :root{
@@ -606,6 +606,21 @@ const UI = {
     });
     this.paintWho();
     this.go(DB.s.person ? "log" : "set");
+
+    /* say something about the invite link instead of failing silently */
+    if(window.__invite === "ok"){
+      setTimeout(()=> this.toast("Connected to the shared job log — add your name below"), 400);
+    } else if(window.__invite === "bad"){
+      setTimeout(()=> this.modal("That invite link didn't come through",
+        `<p style="font-size:14px;color:var(--ink-2);line-height:1.55">
+           The link was cut off somewhere between the text message and here, so this device isn't
+           connected to the shared log yet.</p>
+         <p style="font-size:14px;color:var(--ink-2);line-height:1.55;margin-top:10px">
+           Ask Trace to resend it, and open it by <b>pasting the whole thing into the address bar</b>
+           rather than tapping a preview. Or have him read you the two values from his Settings screen
+           and type them in below.</p>`,
+        `<button class="btn dark" onclick="UI.closeModal()">Got it</button>`), 500);
+    }
     if(DB.linked()){ Cloud.pull().then(()=>this.render()); setInterval(()=>Cloud.pull().then(()=>{ if(this.view!=="log") this.render(); }), 60000); }
     window.addEventListener("focus", () => { if(DB.linked()) Cloud.pull().then(()=>{ if(this.view!=="log") this.render(); }); });
   },
@@ -1602,17 +1617,39 @@ create policy "crew access" on clients
 
 document.getElementById("mask").addEventListener("click", e => { if(e.target.id==="mask") UI.closeModal(); });
 
-/* invite link handoff */
+/* invite link handoff — forgiving about how the link survived the trip */
+window.__invite = null;
 (function(){
-  const m = location.hash.match(/join=([^&]+)/);
-  if(!m) return;
+  let h = location.hash || "";
+  if(!h || h.indexOf("join") === -1) return;
+  try{ h = decodeURIComponent(h); }catch(e){}
+
+  /* tolerate "#join=", "#join", stray spaces, and line breaks from copy/paste */
+  const m = h.match(/join=?\s*([\s\S]+)$/);
+  if(!m){ window.__invite = "bad"; return; }
+  const raw = m[1].replace(/\s+/g,"").replace(/[&?].*$/,"");
+
+  const apply = (u,k) => {
+    DB.load(); DB.s.url = u; DB.s.key = k; DB.save();
+    history.replaceState(null,"",location.pathname);
+    window.__invite = "ok";
+  };
+
+  /* normal case: base64 of {"u":...,"k":...} */
   try{
-    const cfg = JSON.parse(atob(decodeURIComponent(m[1])));
-    if(cfg.u && cfg.k){
-      DB.load(); DB.s.url = cfg.u; DB.s.key = cfg.k; DB.save();
-      history.replaceState(null,"",location.pathname);
-    }
+    const cfg = JSON.parse(atob(raw));
+    if(cfg.u && cfg.k){ apply(cfg.u, cfg.k); return; }
   }catch(e){}
+
+  /* fallback: someone pasted the raw key — derive the project URL from it */
+  if(/^eyJ[\w-]+\.[\w-]+\./.test(raw)){
+    try{
+      const body = JSON.parse(atob(raw.split(".")[1].replace(/-/g,"+").replace(/_/g,"/")));
+      if(body.ref){ apply("https://" + body.ref + ".supabase.co", raw); return; }
+    }catch(e){}
+  }
+
+  window.__invite = "bad";
 })();
 
 UI.boot();
