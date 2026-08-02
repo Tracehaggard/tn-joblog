@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02w">
+<meta name="build" content="2026-08-02x">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -671,6 +671,25 @@ const DB = {
     r.deleted = true; r.updated_at = new Date().toISOString();
     this.save(); Cloud.push([r]);
   },
+  /* Give an id to anything saved without one, so records stranded on a device
+     by the old bug can finally reach the server. Runs once on startup. */
+  repairIds(){
+    const uuidRx = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let fixed = 0;
+    const stamp = new Date().toISOString();
+    const fix = r => {
+      if(!r.id || !uuidRx.test(String(r.id))){ r.id = uuid(); r.updated_at = stamp; fixed++; }
+    };
+    (this.s.entries||[]).forEach(fix);
+    (this.s.subs||[]).forEach(fix);
+    Object.keys(this.s.clients||{}).forEach(k => {
+      const c = this.s.clients[k];
+      if(c && !c.id) { c.id = k; fixed++; }      /* clients are keyed by name, not uuid */
+    });
+    if(fixed) this.save();
+    return fixed;
+  },
+
   clients(){
     const seen = new Map();
     this.live().forEach(e => seen.set(e.client.toLowerCase(), e.client));
@@ -688,6 +707,9 @@ const DB = {
       id: isNew ? uuid() : sub.id,
       deleted: false
     }, sub, { updated_at: new Date().toISOString() });
+    /* an incoming `id: undefined` would overwrite the generated one above and
+       produce a row the database refuses — settle the id last, always */
+    if(!row.id) row.id = uuid();
     if(isNew) this.s.subs.push(row);
     else {
       const i = this.s.subs.findIndex(x => x.id === row.id);
@@ -923,6 +945,7 @@ const Cloud = {
   num(v, d){ const n = Number(v); return isNaN(n) ? d : n; },
   shape(r, table){
     const now = new Date().toISOString();
+    if(!r.id) r.id = uuid();   /* last line of defence — never send a null id */
     if(table === "clients") return {
       id:r.id, name:r.name||"", address:r.address||"", phone:r.phone||"",
       contact:r.contact||"", note:r.note||"",
@@ -1306,7 +1329,12 @@ const UI = {
       /* Pull first so local holds the newest of both sides, then flush everything
          back up. This recovers work that was saved on this device but never
          reached the server, and can't clobber anything newer. */
-      if(!this._flushed){ this._flushed = true; await Cloud.pushAll(); }
+      if(!this._flushed){
+        this._flushed = true;
+        const fixed = DB.repairIds();
+        await Cloud.pushAll();
+        if(fixed) this.toast("Recovered " + fixed + " record" + (fixed>1?"s":"") + " that hadn't saved");
+      }
       else if(document.getElementById("syncAlarm")) await Cloud.pushAll();
       if(this.view!=="log") this.render();
     });
