@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02o">
+<meta name="build" content="2026-08-02p">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -766,6 +766,54 @@ const DB = {
       .sort((a,b)=> (b.work_date+b.updated_at).localeCompare(a.work_date+a.updated_at))[0];
     return hit ? hit.address : "";
   },
+  /* rename a client everywhere it appears */
+  renameClient(from, to){
+    const oldName = (from||"").trim(), newName = (to||"").trim();
+    if(!oldName || !newName || oldName === newName) return 0;
+    const oldKey = oldName.toLowerCase(), newKey = newName.toLowerCase();
+    let touched = 0;
+
+    this.live().filter(e => e.client.trim().toLowerCase() === oldKey).forEach(e => {
+      e.client = newName; e.updated_at = new Date().toISOString(); touched++;
+      Cloud.push([e]);
+    });
+    this.liveSubs().filter(s => s.client.trim().toLowerCase() === oldKey).forEach(s => {
+      s.client = newName; s.updated_at = new Date().toISOString();
+      Cloud.push([s], "subs");
+    });
+
+    const rec = this.s.clients[oldKey];
+    if(rec){
+      const merged = this.s.clients[newKey];
+      const moved = Object.assign({}, rec, { id:newKey, name:newName,
+        address: (merged && merged.address) || rec.address,
+        contact: (merged && merged.contact) || rec.contact,
+        phone:   (merged && merged.phone)   || rec.phone,
+        note:    [merged && merged.note, rec.note].filter(Boolean).join(" · "),
+        updated_at: new Date().toISOString(), deleted:false });
+      this.s.clients[newKey] = moved;
+      if(oldKey !== newKey){
+        rec.deleted = true; rec.updated_at = new Date().toISOString();
+        Cloud.push([rec], "clients");
+        delete this.s.clients[oldKey];
+      }
+      Cloud.push([moved], "clients");
+    }
+    this.save();
+    return touched;
+  },
+
+  /* remove a client record — the jobs keep their history */
+  deleteClient(name){
+    const k = (name||"").trim().toLowerCase();
+    const rec = this.s.clients[k];
+    if(!rec) return;
+    rec.deleted = true; rec.updated_at = new Date().toISOString();
+    Cloud.push([rec], "clients");
+    delete this.s.clients[k];
+    this.save();
+  },
+
   mergeClients(rows){
     let n = 0;
     rows.forEach(r => {
@@ -1919,8 +1967,11 @@ const UI = {
       `<button class="btn dark" id="cNew">+ Add Client</button>`);
 
     v.innerHTML = list.length ? `<div class="cgrid">${list.map(c=>`
-      <button class="ccard" data-c="${esc(c.name)}">
-        <h3>${esc(c.name)}</h3>
+      <div class="ccard" style="position:relative;padding:0">
+        <button class="btn ghost sm noprint" data-cedit="${esc(c.name)}"
+          style="position:absolute;top:10px;right:10px;z-index:2">Edit</button>
+        <button data-c="${esc(c.name)}" style="width:100%;text-align:left;padding:16px;display:block">
+        <h3 style="padding-right:52px">${esc(c.name)}</h3>
         <div class="ad">${esc(c.address || "No address on file")}</div>
         <div class="nums">
           <div>Visits<b class="tnum">${c.visits}</b></div>
@@ -1930,11 +1981,13 @@ const UI = {
         <div style="font-size:12px;color:var(--ink-3);margin-top:10px">
           ${c.last ? "Last visit " + esc(D.dayLbl(c.last)) : "No visits logged yet"}
         </div>
-      </button>`).join("")}</div>`
+        </button>
+      </div>`).join("")}</div>`
       : `<div class="panel"><div class="empty"><b>No clients yet</b>They're created automatically the first time you log a job — or add one now.</div></div>`;
 
     document.getElementById("cNew").onclick = ()=> this.editClient("");
     v.querySelectorAll("[data-c]").forEach(b => b.onclick = ()=>{ this.openClient = b.dataset.c; this.render(); });
+    v.querySelectorAll("[data-cedit]").forEach(b => b.onclick = e => { e.stopPropagation(); this.editClient(b.dataset.cedit); });
   },
 
   vClientDetail(v){
@@ -2041,9 +2094,12 @@ const UI = {
   editClient(name){
     const c = DB.getClient(name) || { name:"", address:"", phone:"", contact:"", note:"" };
     const isNew = !name;
+    const st = isNew ? null : DB.statsFor(name);
+    const subCount = isNew ? 0 : DB.subsFor(name).length;
     this.modal(isNew ? "Add Client" : "Edit " + c.name,
       `<div class="mb"><label class="f" for="e-name">Client name</label>
-         <input class="inp" id="e-name" value="${esc(c.name)}" ${isNew?"":"readonly style='background:#f6f7f8'"} placeholder="Riverbend Dental"></div>
+         <input class="inp" id="e-name" value="${esc(c.name)}" placeholder="Riverbend Dental">
+         ${isNew?"":`<div class="hint">Renaming updates all ${st.visits} job${st.visits===1?"":"s"}${subCount?` and ${subCount} subscription${subCount===1?"":"s"}`:""}. Type an existing client's name to merge them together.</div>`}</div>
        <div class="mb"><label class="f" for="e-addr">Address</label>
          <input class="inp" id="e-addr" value="${esc(c.address)}" placeholder="905 Gallatin Pike, Madison TN"></div>
        <div class="grid2 mb">
@@ -2054,11 +2110,24 @@ const UI = {
        </div>
        <div><label class="f" for="e-note">Notes about this client</label>
          <textarea class="inp" id="e-note" placeholder="Server closet is behind the front desk. Gate code 4412. Bill through the practice manager.">${esc(c.note)}</textarea></div>`,
-      `<button class="btn" onclick="UI.closeModal()">Cancel</button><button class="btn accent" id="e-save">Save Client</button>`);
+      `${isNew?"":'<button class="btn" id="e-del" style="color:#c0392b;margin-right:auto">Delete</button>'}
+       <button class="btn" onclick="UI.closeModal()">Cancel</button>
+       <button class="btn accent" id="e-save">Save Client</button>`);
 
     document.getElementById("e-save").onclick = ()=>{
       const nm = document.getElementById("e-name").value.trim();
       if(!nm){ this.toast("Client needs a name"); return; }
+
+      /* renaming onto an existing client merges the two */
+      if(!isNew && nm.toLowerCase() !== c.name.toLowerCase()){
+        const clash = DB.getClient(nm);
+        const msg = clash
+          ? `Merge ${c.name} into ${clash.name}?\n\n${st.visits} job${st.visits===1?"":"s"}${subCount?` and ${subCount} subscription${subCount===1?"":"s"}`:""} will move over, and ${c.name} goes away. This can't be undone.`
+          : `Rename ${c.name} to ${nm}?\n\nThis updates ${st.visits} job${st.visits===1?"":"s"}${subCount?` and ${subCount} subscription${subCount===1?"":"s"}`:""}.`;
+        if(!confirm(msg)) return;
+        DB.renameClient(c.name, nm);
+      }
+
       DB.saveClient({
         name: nm,
         address: document.getElementById("e-addr").value.trim(),
@@ -2069,6 +2138,19 @@ const UI = {
       this.closeModal();
       this.openClient = nm;
       this.toast("Client saved");
+      this.render();
+    };
+
+    const del = document.getElementById("e-del");
+    if(del) del.onclick = ()=>{
+      const warn = st.visits
+        ? `Remove ${c.name} from your client list?\n\nTheir ${st.visits} logged job${st.visits===1?"":"s"} stay in the log and keep their history — you're only deleting the address book entry, so the address, phone and notes go away.`
+        : `Remove ${c.name} from your client list?`;
+      if(!confirm(warn)) return;
+      DB.deleteClient(c.name);
+      this.closeModal();
+      this.openClient = null;
+      this.toast(c.name + " removed");
       this.render();
     };
   },
