@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02p">
+<meta name="build" content="2026-08-02q">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -1253,6 +1253,66 @@ const UI = {
     if(this.view==="set")  { this.head("Settings","Your name, and shared access for the crew."); v.innerHTML = this.vSet(); this.wireSet(); }
   },
 
+  /* ---------- UNSAVED DRAFT PROTECTION ---------- */
+  DRAFT: "tnit.draft",
+  updateWaiting: null,
+
+  draftFields: ["i-client","i-date","i-address","i-billed","i-start","i-end",
+                "i-hours","i-rate","i-mstart","i-mend","i-notes",
+                "r-item","r-qty","r-price","r-cycle","r-due"],
+
+  readDraft(){
+    const d = {};
+    this.draftFields.forEach(id => { const el = document.getElementById(id); if(el) d[id] = el.value; });
+    const rc = document.getElementById("i-recur");
+    if(rc) d.recur = rc.checked;
+    d.mode = DB.s.mode;
+    return d;
+  },
+  /* is there anything worth protecting? */
+  draftHasContent(d){
+    return !!((d["i-client"]||"").trim() || (d["i-notes"]||"").trim() ||
+              (d["i-start"]||"") || (d["i-hours"]||"") ||
+              (d["i-mstart"]||"") || (d["i-address"]||"").trim());
+  },
+  hasDraft(){
+    if(this.view === "log"){
+      const el = document.getElementById("i-client");
+      if(el) return this.draftHasContent(this.readDraft());
+    }
+    try{ return this.draftHasContent(JSON.parse(localStorage.getItem(this.DRAFT) || "{}")); }
+    catch(e){ return false; }
+  },
+  saveDraft(){
+    const d = this.readDraft();
+    try{
+      if(this.draftHasContent(d)) localStorage.setItem(this.DRAFT, JSON.stringify(d));
+      else localStorage.removeItem(this.DRAFT);
+    }catch(e){}
+  },
+  clearDraft(){ try{ localStorage.removeItem(this.DRAFT); }catch(e){} },
+  loadDraft(){
+    try{ const d = JSON.parse(localStorage.getItem(this.DRAFT) || "null");
+         return (d && this.draftHasContent(d)) ? d : null; }
+    catch(e){ return null; }
+  },
+
+  showUpdateBar(){
+    if(document.getElementById("updBar")) return;
+    const b = document.createElement("div");
+    b.id = "updBar";
+    b.style.cssText = "position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:70;"+
+      "background:var(--ink);color:#fff;padding:10px 14px;border-radius:8px;font-size:13.5px;"+
+      "display:flex;align-items:center;gap:12px;box-shadow:0 8px 24px rgba(0,0,0,.25)";
+    b.innerHTML = `<span>A new version is ready — it'll load once you've saved.</span>
+      <button class="btn sm" id="updNow" style="background:#fff;border-color:#fff;color:var(--ink)">Reload now</button>`;
+    document.body.appendChild(b);
+    document.getElementById("updNow").onclick = ()=>{
+      if(UI.hasDraft() && !confirm("You have an unsaved entry. Reload anyway and lose it?")) return;
+      location.replace(location.pathname + "?b=" + (UI.updateWaiting||Date.now()));
+    };
+  },
+
   /* ---------- NEW ENTRY ---------- */
   vLog(){
     const cl = DB.clientList().map(c=>c.name);
@@ -1631,11 +1691,46 @@ const UI = {
       } else {
         this.toast("Saved — " + client + " · " + hFmt(h) + "h" + (drove ? " · " + MI.fmt(drove) + " mi" : ""));
       }
+      this.clearDraft();           /* it's in the book now — nothing left to protect */
+      if(this.updateWaiting){ location.replace(location.pathname + "?b=" + this.updateWaiting); return; }
       this.render();
 
       document.getElementById("i-client").focus();
     });
     document.querySelectorAll("[data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
+
+    /* ---- restore anything left unsaved, then keep saving as they type ---- */
+    const draft = this.loadDraft();
+    if(draft && !pre.client){
+      this.draftFields.forEach(id => {
+        const el = document.getElementById(id);
+        if(el && draft[id] !== undefined && draft[id] !== "") el.value = draft[id];
+      });
+      if(draft.recur){
+        const rc = document.getElementById("i-recur");
+        if(rc && !rc.checked){ rc.checked = true; rc.dispatchEvent(new Event("change")); }
+      }
+      if(draft.mode && draft.mode !== DB.s.mode){
+        const b = document.querySelector(`#modeSeg button[data-m="${draft.mode}"]`);
+        if(b) b.click();
+      }
+      paintMoney(); paintMiles(); paint(); paintRecur();
+
+      const bar = document.createElement("div");
+      bar.style.cssText = "background:#fff7ed;border:1px solid #f0c3a1;color:#9a3a05;border-radius:8px;"+
+        "padding:10px 13px;margin-bottom:14px;font-size:13.5px;display:flex;align-items:center;gap:12px";
+      bar.innerHTML = `<span><b>Picked up where you left off.</b> This entry wasn't saved yet.</span>
+        <button type="button" class="btn sm" id="dropDraft" style="margin-left:auto">Start Over</button>`;
+      const form = document.getElementById("f");
+      form.parentNode.insertBefore(bar, form);
+      document.getElementById("dropDraft").onclick = ()=>{
+        this.clearDraft(); this.render(); this.toast("Cleared");
+      };
+    }
+
+    const remember = () => this.saveDraft();
+    ["input","change"].forEach(ev => document.getElementById("f").addEventListener(ev, remember));
+
     document.getElementById("i-client").focus();
   },
 
@@ -3103,6 +3198,13 @@ async function checkBuild(){
     const html = await r.text();
     const m = html.match(/name="build" content="([^"]+)"/);
     if(m && m[1] !== BUILD){
+      /* never reload out from under someone who's mid-entry —
+         wait until the form is empty or the work is saved */
+      if(UI.hasDraft()){
+        UI.updateWaiting = m[1];
+        UI.showUpdateBar();
+        return;
+      }
       UI.toast("Updating to the latest version…");
       setTimeout(()=> location.replace(location.pathname + "?b=" + m[1]), 700);
     }
