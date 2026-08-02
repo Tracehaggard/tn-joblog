@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02u">
+<meta name="build" content="2026-08-02v">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -1265,9 +1265,13 @@ const UI = {
 
     const sync = () => Auth.ready().then(async ok => {
       if(!ok){ this.signInScreen("Your session expired — sign in again."); return; }
-      /* anything that failed to save keeps trying until it lands */
-      if(document.getElementById("syncAlarm")) await Cloud.pushAll();
-      Cloud.pull().then(()=>{ if(this.view!=="log") this.render(); });
+      await Cloud.pull();
+      /* Pull first so local holds the newest of both sides, then flush everything
+         back up. This recovers work that was saved on this device but never
+         reached the server, and can't clobber anything newer. */
+      if(!this._flushed){ this._flushed = true; await Cloud.pushAll(); }
+      else if(document.getElementById("syncAlarm")) await Cloud.pushAll();
+      if(this.view!=="log") this.render();
     });
     sync();
     if(!this._syncTimer) this._syncTimer = setInterval(sync, 60000);
