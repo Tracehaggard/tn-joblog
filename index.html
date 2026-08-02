@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02j">
+<meta name="build" content="2026-08-02k">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -526,7 +526,7 @@ const Auth = {
 };
 
 const DB = {
-  s: { entries: [], clients: {}, subs: [], person: "", url: "", key: "", weekStart: 1, round: 0, mode: "clock", lock: null },
+  s: { entries: [], clients: {}, subs: [], person: "", url: "", key: "", weekStart: 1, round: 0, mode: "clock", rate: 0, lock: null },
 
   load(){
     try{ const r = localStorage.getItem(KEY); if(r) Object.assign(this.s, JSON.parse(r)); }catch(e){}
@@ -569,6 +569,7 @@ const DB = {
       miles_end:   e.milesEnd   === "" || e.milesEnd   == null ? null : Number(e.milesEnd),
       notes: e.notes.trim(), person: this.s.person || "",
       billed: e.billed || "unbilled",
+      rate: Number(e.rate || 0),
       sub_id: e.subId || null,
       updated_at: new Date().toISOString(), deleted: false
     };
@@ -678,6 +679,7 @@ const DB = {
       visits: list.length,
       hours:  list.reduce((s,e)=> s + Number(e.hours), 0),
       miles:  list.reduce((s,e)=> s + MI.of(e), 0),
+      money:  RATE.total(list),
       open:   BILL.openHours(list),
       last:   list.length ? list[0].work_date : "",
       first:  list.length ? list[list.length-1].work_date : "",
@@ -761,7 +763,7 @@ const Cloud = {
         .then(res => res.ok ? res.json() : [])
         .then(ss => DB.mergeSubs(ss.map(s => ({
           id:s.id, client:s.client, item:s.item||"", qty:Number(s.qty||1),
-          unit_price:Number(s.unit_price||0), cycle:s.cycle||"monthly",
+          unit_price:Number(s.unit_price||0), unit_cost:Number(s.unit_cost||0), cycle:s.cycle||"monthly",
           next_due:s.next_due||"", last_billed:s.last_billed||"", note:s.note||"",
           active:s.active!==false, updated_at:s.updated_at||"", deleted:!!s.deleted
         }))))
@@ -777,7 +779,7 @@ const Cloud = {
         miles_start: x.miles_start==null ? null : Number(x.miles_start),
         miles_end:   x.miles_end==null   ? null : Number(x.miles_end),
         notes:x.notes||"", person:x.person||"", billed:x.billed||"unbilled",
-        sub_id:x.sub_id||null,
+        rate:Number(x.rate||0), sub_id:x.sub_id||null,
         updated_at:x.updated_at||"", deleted:!!x.deleted
       })));
       this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
@@ -865,14 +867,29 @@ const T = {
 const $m = n => "$" + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
 const $r = n => "$" + Math.round(Number(n||0)).toLocaleString();
 
+/* labour money */
+const RATE = {
+  of(e){ return Number(e.rate || 0); },
+  amount(e){ return Number(e.hours || 0) * RATE.of(e); },
+  total(list){ return list.reduce((t,e)=> t + RATE.amount(e), 0); },
+  /* entries between two ISO dates, inclusive */
+  between(a, b){ return DB.live().filter(e => e.work_date >= a && e.work_date <= b); }
+};
+
 /* recurring subscriptions */
 const SUB = {
   cycles: { monthly:1, quarterly:3, annual:12 },
   label:  { monthly:"Monthly", quarterly:"Quarterly", annual:"Annual" },
   per:    { monthly:"/mo", quarterly:"/qtr", annual:"/yr" },
 
-  amount(s){ return Number(s.qty || 1) * Number(s.unit_price || 0); },
+  amount(s){ return Number(s.qty || 1) * Number(s.unit_price || 0); },   // what the client pays
+  cost(s){   return Number(s.qty || 1) * Number(s.unit_cost  || 0); },   // what it costs us
+  profit(s){ return SUB.amount(s) - SUB.cost(s); },
+  margin(s){ const a = SUB.amount(s); return a ? (SUB.profit(s) / a) * 100 : 0; },
+
   monthly(s){ return SUB.amount(s) / (SUB.cycles[s.cycle] || 1); },
+  monthlyCost(s){ return SUB.cost(s) / (SUB.cycles[s.cycle] || 1); },
+  monthlyProfit(s){ return SUB.profit(s) / (SUB.cycles[s.cycle] || 1); },
   yearly(s){ return SUB.monthly(s) * 12; },
 
   /* push a due date forward one cycle, keeping the day of month sane */
@@ -1179,6 +1196,15 @@ const UI = {
                     ${[0.5,1,1.5,2,3,4,6,8].map(h=>`<button type="button" class="chip" data-h="${h}">${h}h</button>`).join("")}
                   </div>
                 </div>
+
+                <div class="timerow" style="margin-top:14px">
+                  <div class="tf">
+                    <label class="f" for="i-rate">Hourly rate</label>
+                    <input class="inp tnum" id="i-rate" type="number" step="1" min="0"
+                           value="${DB.s.rate || ""}" placeholder="0" style="width:130px">
+                  </div>
+                  <div class="calc" id="i-money"><b>—</b><span>Set an hourly rate to price this job</span></div>
+                </div>
               </div>
 
               <div class="mb">
@@ -1352,6 +1378,28 @@ const UI = {
     me.addEventListener("input", paintMiles);
     paintMiles();
 
+    /* live job value: hours × rate */
+    const rateEl = document.getElementById("i-rate");
+    const moneyEl = document.getElementById("i-money");
+    const currentHours = () => {
+      if(DB.s.mode === "clock"){
+        const m = T.mins(start.value, end.value);
+        return (m === null || m === 0) ? 0 : T.round(m, DB.s.round) / 60;
+      }
+      return Number(hours.value || 0);
+    };
+    const paintMoney = () => {
+      const r = Number(rateEl.value || 0), h = currentHours();
+      if(!r){ moneyEl.className = "calc"; moneyEl.innerHTML = "<b>—</b><span>Set an hourly rate to price this job</span>"; return; }
+      moneyEl.className = "calc" + (h ? " live" : "");
+      moneyEl.innerHTML = h
+        ? `<b class="tnum">${$m(h*r)}</b><span>${hFmt(h)} h × ${$m(r)}/hr</span>`
+        : `<b>—</b><span>${$m(r)}/hr · add hours to see the total</span>`;
+    };
+    rateEl.addEventListener("input", paintMoney);
+    [start, end, hours].forEach(el => el.addEventListener("input", paintMoney));
+    paintMoney();
+
     /* recurring add-on */
     const recur = document.getElementById("i-recur");
     const pane  = document.getElementById("recurPane");
@@ -1443,7 +1491,12 @@ const UI = {
       DB.add({ client, date, hours:h, notes, start:s, end:e,
                address: addr.value, milesStart:mStart, milesEnd:mEnd,
                billed: document.getElementById("i-billed").value,
+               rate: Number(rateEl.value || 0),
                subId: saved ? saved.id : null });
+
+      /* remember the rate so you're not retyping it every job */
+      const usedRate = Number(rateEl.value || 0);
+      if(usedRate && usedRate !== DB.s.rate){ DB.s.rate = usedRate; DB.save(); }
 
       if(sub){
         this.toast("Saved — " + client + " · " + hFmt(h) + "h · " + $m(SUB.amount(sub)) + SUB.per[sub.cycle] + " recurring");
@@ -1494,10 +1547,11 @@ const UI = {
     const map = new Map();
     rows.forEach(e => {
       const k = e.client.toLowerCase();
-      if(!map.has(k)) map.set(k, { name:e.client, hours:0, miles:0, address:"", list:[] });
+      if(!map.has(k)) map.set(k, { name:e.client, hours:0, miles:0, money:0, address:"", list:[] });
       const g = map.get(k);
       g.hours += Number(e.hours);
       g.miles += MI.of(e);
+      g.money += RATE.amount(e);
       if(!g.address && (e.address||"").trim()) g.address = e.address;
       g.list.push(e);
     });
@@ -1568,7 +1622,43 @@ const UI = {
         <div class="stat"><div class="k">Avg / Day</div><div class="v tnum">${w.days? hFmt(w.total/w.days):"0"}<small> h</small></div></div>
         <div class="stat"><div class="k">Miles Driven</div><div class="v tnum">${MI.fmt(w.miles)}<small> mi</small></div></div>
         <div class="stat${w.openAll?" warn":""}"><div class="k">Not Yet Billed</div><div class="v tnum">${hFmt(w.openAll)}<small> h</small></div></div>
+        <div class="stat"><div class="k">Labor Billed</div><div class="v tnum">${$r(RATE.total(w.rows))}</div></div>
       </div>
+
+      ${(()=>{
+        const now = new Date();
+        const mStart = D.iso(new Date(now.getFullYear(), now.getMonth(), 1));
+        const yStart = D.iso(new Date(now.getFullYear(), 0, 1));
+        const today  = D.today();
+        const wk = RATE.total(w.rows);
+        const mo = RATE.total(RATE.between(mStart, today));
+        const yr = RATE.total(RATE.between(yStart, today));
+        const subsMo = DB.liveSubs().filter(s=>s.active).reduce((t,s)=> t + SUB.monthly(s), 0);
+        const unpriced = w.rows.filter(e => !RATE.of(e)).length;
+        if(!wk && !mo && !yr && !subsMo) return "";
+        return `
+        <div class="panel mb noprint">
+          <div class="panel-h"><h2>Money</h2>
+            ${unpriced?`<span class="hint" style="margin:0;color:var(--accent)">${unpriced} job${unpriced===1?"":"s"} this week with no rate</span>`:""}</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;background:var(--line-2)">
+            <div style="background:#fff;padding:15px 18px">
+              <div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650">Labor · This Week</div>
+              <div class="tnum" style="font-size:23px;font-weight:660;margin-top:4px">${$r(wk)}</div></div>
+            <div style="background:#fff;padding:15px 18px">
+              <div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650">Labor · This Month</div>
+              <div class="tnum" style="font-size:23px;font-weight:660;margin-top:4px">${$r(mo)}</div></div>
+            <div style="background:#fff;padding:15px 18px">
+              <div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650">Labor · This Year</div>
+              <div class="tnum" style="font-size:23px;font-weight:660;margin-top:4px">${$r(yr)}</div></div>
+            <div style="background:#fff;padding:15px 18px">
+              <div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650">Recurring / mo</div>
+              <div class="tnum" style="font-size:23px;font-weight:660;margin-top:4px">${$r(subsMo)}</div></div>
+            <div style="background:#fafbfc;padding:15px 18px">
+              <div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650">Month + Recurring</div>
+              <div class="tnum" style="font-size:23px;font-weight:660;margin-top:4px;color:var(--accent)">${$r(mo + subsMo)}</div></div>
+          </div>
+        </div>`;
+      })()}
       <div class="panel">
         <div class="panel-h"><h2>By Client</h2><span class="hint" style="margin:0">Click a client to expand</span></div>
         ${w.groups.length ? w.groups.map((g,i)=>`
@@ -1579,7 +1669,7 @@ const UI = {
               <span class="nm">${esc(g.name)}${g.address?`<span style="font-weight:400;color:var(--ink-3);font-size:12.5px"> · ${esc(g.address)}</span>`:""}</span>
               <span class="ct">${g.list.length} visit${g.list.length>1?"s":""}${g.miles?` · ${MI.fmt(g.miles)} mi`:""}</span>
               <span class="bar"><i style="width:${Math.max(6,(g.hours/max)*100)}%"></i></span>
-              <span class="hr tnum">${hFmt(g.hours)}h</span>
+              <span class="hr tnum">${hFmt(g.hours)}h${g.money?`<small style="display:block;font-size:11px;font-weight:600;color:var(--ink-3)">${$r(g.money)}</small>`:""}</span>
             </button>
             <div class="grp-b">
               <div class="noprint" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px">
@@ -1590,7 +1680,7 @@ const UI = {
                 <div class="ent">
                   <div class="d">${esc(D.dayLbl(e.work_date))}${T.range(e.start_time,e.end_time)?`<div class="times" style="font-weight:500;margin-top:2px">${esc(T.range(e.start_time,e.end_time))}</div>`:""}</div>
                   <div class="n">${esc(e.notes)}${e.person?`<span style="color:var(--ink-3);font-size:12px"> — ${esc(e.person)}</span>`:""}${MI.of(e)?`<div class="times" style="margin-top:3px">${MI.fmt(MI.of(e))} mi &nbsp;<span style="font-weight:400">(${MI.fmt(e.miles_start)} → ${MI.fmt(e.miles_end)})</span></div>`:""}${(()=>{const s=e.sub_id&&DB.liveSubs().find(x=>x.id===e.sub_id);return s?`<div class="times" style="margin-top:3px;color:var(--good)">↻ ${esc(s.item)} · ${$m(SUB.amount(s))}${SUB.per[s.cycle]}</div>`:"";})()}</div>
-                  <div class="h tnum">${hFmt(e.hours)}h</div>
+                  <div class="h tnum">${hFmt(e.hours)}h${RATE.amount(e)?`<small style="display:block;font-size:11px;font-weight:600;color:var(--ink-3)">${$m(RATE.amount(e))}</small>`:""}</div>
                   ${BILL.select(e)}
                   <button class="x noprint" data-edit="${e.id}" title="Edit">Edit</button>
                 </div>`).join("")}
@@ -1702,6 +1792,7 @@ const UI = {
     const st = DB.statsFor(name);
 
     this.head(c.name, st.visits ? st.visits + " visits · " + hFmt(st.hours) + " hours · " + MI.fmt(st.miles) + " miles"
+                        + (st.money ? " · " + $r(st.money) + " labor" : "")
                         + (st.open ? " · " + hFmt(st.open) + "h to bill" : " · all billed") : "No visits logged yet",
       `<button class="btn" id="cBack">← All Clients</button>
        <button class="btn" id="cEdit" style="margin-left:8px">Edit Details</button>
@@ -1838,12 +1929,14 @@ const UI = {
     const all = DB.liveSubs();
     const active = all.filter(s => s.active);
     const mrr = active.reduce((t,s)=> t + SUB.monthly(s), 0);
+    const mcost = active.reduce((t,s)=> t + SUB.monthlyCost(s), 0);
+    const mprofit = mrr - mcost;
     const clients = new Set(active.map(s => s.client.trim().toLowerCase())).size;
     const seats = active.reduce((t,s)=> t + Number(s.qty||0), 0);
     const dueSoon = active.filter(s => SUB.daysUntil(s.next_due) <= 14);
     const dueValue = dueSoon.reduce((t,s)=> t + SUB.amount(s), 0);
 
-    this.head("Recurring", active.length + " active · " + $r(mrr) + "/mo · " + $r(mrr*12) + "/yr",
+    this.head("Recurring", active.length + " active · " + $r(mrr) + "/mo billed · " + $r(mprofit) + "/mo profit",
       `<button class="btn dark" id="sbNew">+ Add Subscription</button>`);
 
     let list = all.slice();
@@ -1859,19 +1952,21 @@ const UI = {
     const byClient = new Map();
     list.forEach(s => {
       const k = s.client.trim().toLowerCase();
-      if(!byClient.has(k)) byClient.set(k, { name:s.client, rows:[], mo:0 });
+      if(!byClient.has(k)) byClient.set(k, { name:s.client, rows:[], mo:0, prof:0 });
       const g = byClient.get(k);
       g.rows.push(s);
-      if(s.active) g.mo += SUB.monthly(s);
+      if(s.active){ g.mo += SUB.monthly(s); g.prof += SUB.monthlyProfit(s); }
     });
     const groups = [...byClient.values()].sort((a,b)=> b.mo - a.mo);
 
     v.innerHTML = `
       <div class="stats">
-        <div class="stat"><div class="k">Monthly Recurring</div><div class="v tnum">${$r(mrr)}</div></div>
-        <div class="stat"><div class="k">Annual Run Rate</div><div class="v tnum">${$r(mrr*12)}</div></div>
-        <div class="stat"><div class="k">Active Subs</div><div class="v tnum">${active.length}</div></div>
-        <div class="stat"><div class="k">Clients</div><div class="v tnum">${clients}</div></div>
+        <div class="stat"><div class="k">Billed / mo</div><div class="v tnum">${$r(mrr)}</div></div>
+        <div class="stat"><div class="k">Our Cost / mo</div><div class="v tnum" style="color:var(--ink-3)">${$r(mcost)}</div></div>
+        <div class="stat"><div class="k">Profit / mo</div><div class="v tnum" style="color:var(--good)">${$r(mprofit)}</div></div>
+        <div class="stat"><div class="k">Profit / yr</div><div class="v tnum" style="color:var(--good)">${$r(mprofit*12)}</div></div>
+        <div class="stat"><div class="k">Margin</div><div class="v tnum">${mrr?Math.round((mprofit/mrr)*100):0}<small>%</small></div></div>
+        <div class="stat"><div class="k">Active · Clients</div><div class="v tnum">${active.length}<small> · ${clients}</small></div></div>
         <div class="stat"><div class="k">Seats / Units</div><div class="v tnum">${seats.toLocaleString()}</div></div>
         <div class="stat${dueSoon.length?" warn":""}"><div class="k">Due Now</div><div class="v tnum">${$r(dueValue)}</div></div>
       </div>
@@ -1908,7 +2003,7 @@ const UI = {
             <div class="subhead">
               <span class="nm2">${esc(g.name)}</span>
               <span class="ct" style="font-size:12px;color:var(--ink-3)">${g.rows.length} item${g.rows.length===1?"":"s"}</span>
-              <span class="tnum" style="font-weight:680;font-size:15px">${$r(g.mo)}<small style="font-size:11px;font-weight:600;color:var(--ink-3)">/mo</small></span>
+              <span class="tnum" style="font-weight:680;font-size:15px">${$r(g.mo)}<small style="font-size:11px;font-weight:600;color:var(--ink-3)">/mo</small>${g.prof?`<small style="font-size:11px;font-weight:600;color:var(--good)"> · ${$r(g.prof)} profit</small>`:""}</span>
             </div>
             ${g.rows.map(s=>`
               <div class="subrow">
@@ -1916,6 +2011,7 @@ const UI = {
                   <div class="nm2">${esc(s.item)}</div>
                   <div class="meta2">
                     ${Number(s.qty)} × ${$m(s.unit_price)} · ${SUB.label[s.cycle]}${s.next_due ? " · next " + esc(D.due(s.next_due)) : ""}${s.last_billed ? " · billed " + esc(D.due(s.last_billed)) : ""}${s.note ? " · " + esc(s.note) : ""}
+                    ${SUB.cost(s) ? `<span style="color:var(--good);font-weight:600"> · ${$m(SUB.profit(s))} profit (${Math.round(SUB.margin(s))}%)</span>` : ""}
                   </div>
                 </div>
                 ${SUB.badge(s)}
@@ -1933,10 +2029,11 @@ const UI = {
 
     document.getElementById("sbCsv").onclick = ()=>{
       const rows = DB.liveSubs().slice().sort((a,b)=> a.client.localeCompare(b.client));
-      const csv = ["Client,Item,Qty,Unit Price,Cycle,Amount,Monthly Value,Next Due,Last Billed,Status,Notes"]
+      const csv = ["Client,Item,Qty,Client Price,Our Cost,Cycle,Billed,Cost,Profit,Margin %,Monthly Billed,Monthly Profit,Next Due,Last Billed,Status,Notes"]
         .concat(rows.map(s => [
-          s.client, s.item, s.qty, s.unit_price, SUB.label[s.cycle],
-          SUB.amount(s).toFixed(2), SUB.monthly(s).toFixed(2),
+          s.client, s.item, s.qty, s.unit_price, s.unit_cost||0, SUB.label[s.cycle],
+          SUB.amount(s).toFixed(2), SUB.cost(s).toFixed(2), SUB.profit(s).toFixed(2), Math.round(SUB.margin(s)),
+          SUB.monthly(s).toFixed(2), SUB.monthlyProfit(s).toFixed(2),
           s.next_due||"", s.last_billed||"", s.active?"Active":"Paused", s.note||""
         ].map(x=>`"${String(x).replace(/"/g,'""')}"`).join(","))).join("\n");
       const a=document.createElement("a");
@@ -1980,8 +2077,13 @@ const UI = {
        <div class="grid2 mb">
          <div><label class="f" for="b-qty">Seats / Quantity</label>
            <input class="inp tnum" id="b-qty" type="number" step="1" min="0" value="${d.qty}"></div>
-         <div><label class="f" for="b-price">Price each</label>
+         <div><label class="f" for="b-price">Client pays <span style="font-weight:500;color:var(--ink-3)">each</span></label>
            <input class="inp tnum" id="b-price" type="number" step="0.01" min="0" value="${d.unit_price}"></div>
+       </div>
+
+       <div class="mb" style="max-width:calc(50% - 7px)">
+         <label class="f" for="b-cost">Our cost <span style="font-weight:500;color:var(--ink-3)">each</span></label>
+         <input class="inp tnum" id="b-cost" type="number" step="0.01" min="0" value="${d.unit_cost||0}" placeholder="0.00">
        </div>
 
        <div class="grid2 mb">
@@ -2008,14 +2110,19 @@ const UI = {
 
     const $ = i => document.getElementById(i);
     const paint = () => {
-      const qty = Number($("b-qty").value||0), pr = Number($("b-price").value||0), cy = $("b-cycle").value;
-      const amt = qty * pr, mo = amt / SUB.cycles[cy];
+      const qty = Number($("b-qty").value||0), pr = Number($("b-price").value||0),
+            ct = Number($("b-cost").value||0), cy = $("b-cycle").value;
+      const amt = qty*pr, cost = qty*ct, profit = amt - cost;
+      const mo = amt / SUB.cycles[cy], moP = profit / SUB.cycles[cy];
+      const pct = amt ? Math.round((profit/amt)*100) : 0;
       $("b-calc").className = "calc" + (amt ? " live" : "");
       $("b-calc").innerHTML = amt
-        ? `<b class="tnum">${$m(amt)}</b><span>every ${SUB.label[cy].toLowerCase().replace("ly","")} · ${$m(mo)}/mo · ${$m(mo*12)}/yr</span>`
+        ? `<b class="tnum">${$m(profit)} profit</b>
+           <span>${$m(amt)} billed − ${$m(cost)} cost · ${pct}% margin<br>
+           ${$m(mo)}/mo in · ${$m(moP)}/mo profit · ${$m(moP*12)}/yr profit</span>`
         : `<b>—</b><span>Enter quantity and price</span>`;
     };
-    ["b-qty","b-price","b-cycle"].forEach(i => $(i).addEventListener("input", paint));
+    ["b-qty","b-price","b-cost","b-cycle"].forEach(i => $(i).addEventListener("input", paint));
     $("b-cycle").addEventListener("change", paint);
     paint();
 
@@ -2032,6 +2139,7 @@ const UI = {
         client, item,
         qty: Number($("b-qty").value||1),
         unit_price: Number($("b-price").value||0),
+        unit_cost: Number($("b-cost").value||0),
         cycle: $("b-cycle").value,
         next_due: $("b-due").value,
         last_billed: d.last_billed || "",
@@ -2163,6 +2271,16 @@ const UI = {
     $("x-start").addEventListener("input", recalc);
     $("x-end").addEventListener("input", recalc);
 
+    const paintVal = () => {
+      const hrs = Number($("x-hours").value||0), rt = Number($("x-rate").value||0);
+      $("x-money").className = "calc" + (hrs*rt ? " live" : "");
+      $("x-money").innerHTML = (hrs && rt)
+        ? `<b class="tnum">${$m(hrs*rt)}</b><span>${hFmt(hrs)} h × ${$m(rt)}</span>`
+        : `<b>—</b><span>No rate set</span>`;
+    };
+    ["x-hours","x-rate","x-start","x-end"].forEach(i => $(i).addEventListener("input", paintVal));
+    paintVal();
+
     const paintM = () => {
       const a = $("x-ms").value === "" ? null : Number($("x-ms").value);
       const b = $("x-me").value === "" ? null : Number($("x-me").value);
@@ -2241,6 +2359,7 @@ const UI = {
       DB.update(id, {
         client, work_date:date, hours, notes,
         sub_id: newSubId || e.sub_id || null,
+        rate: Number($("x-rate").value || 0),
         address: $("x-addr").value.trim(),
         person: $("x-person").value.trim(),
         billed: $("x-billed").value,
@@ -2344,12 +2463,12 @@ const UI = {
       const miles = rows.reduce((s,e)=>s+MI.of(e),0);
       const open = BILL.openHours(rows);
       document.getElementById("rc").textContent = rows.length + " entr" + (rows.length===1?"y":"ies") + " · " + hFmt(total) + "h"
-        + (miles? " · "+MI.fmt(miles)+" mi" : "") + (open? " · " + hFmt(open) + "h to bill" : "");
+        + (miles? " · "+MI.fmt(miles)+" mi" : "") + (RATE.total(rows)? " · " + $r(RATE.total(rows)) : "") + (open? " · " + hFmt(open) + "h to bill" : "");
       document.getElementById("rl").innerHTML = rows.length ? rows.map(e=>`
         <div class="res">
           <div class="meta"><b>${hl(e.client)}</b><span>${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}${T.range(e.start_time,e.end_time)?`<br>${esc(T.range(e.start_time,e.end_time))}`:""}${MI.of(e)?`<br>${MI.fmt(MI.of(e))} mi`:""}</span></div>
           <div class="txt">${e.address?`<div class="times" style="margin-bottom:4px">${hl(e.address)}</div>`:""}${hl(e.notes)}</div>
-          <div class="hh tnum">${hFmt(e.hours)}h</div>
+          <div class="hh tnum">${hFmt(e.hours)}h${RATE.amount(e)?`<small style="display:block;font-size:11px;font-weight:600;color:var(--ink-3)">${$m(RATE.amount(e))}</small>`:""}</div>
           ${BILL.select(e)}
           <button class="btn ghost sm" data-edit="${e.id}">Edit</button>
         </div>`).join("")
@@ -2361,8 +2480,9 @@ const UI = {
     q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run); qp.addEventListener("change",run);
     document.getElementById("csv").onclick = ()=>{
       const rows = DB.live().slice().sort((a,b)=>a.work_date.localeCompare(b.work_date));
-      const csv = ["Date,Client,Address,Start,End,Hours,Miles Start,Miles End,Miles Driven,Billing,Logged By,Notes"].concat(rows.map(e =>
+      const csv = ["Date,Client,Address,Start,End,Hours,Rate,Amount,Miles Start,Miles End,Miles Driven,Billing,Logged By,Notes"].concat(rows.map(e =>
         [e.work_date, e.client, e.address||"", T.label(e.start_time), T.label(e.end_time), e.hours,
+         RATE.of(e)||"", RATE.amount(e)?RATE.amount(e).toFixed(2):"",
          e.miles_start==null?"":e.miles_start, e.miles_end==null?"":e.miles_end, MI.of(e)||"",
          BILL.label[BILL.of(e)], e.person||"", e.notes]
           .map(x=>`"${String(x).replace(/"/g,'""')}"`).join(",")
@@ -2394,6 +2514,11 @@ const UI = {
                 <option value="1"${s.weekStart===1?" selected":""}>Monday</option>
                 <option value="0"${s.weekStart===0?" selected":""}>Sunday</option>
               </select>
+            </div>
+            <div class="col" style="max-width:180px">
+              <label class="f" for="s-rate">Default hourly rate</label>
+              <input class="inp tnum" id="s-rate" type="number" step="1" min="0" value="${s.rate||""}" placeholder="0">
+              <div class="hint">Pre-filled on every new job.</div>
             </div>
             <div class="col" style="max-width:240px">
               <label class="f" for="s-rd">Round clock time to</label>
@@ -2445,6 +2570,7 @@ const UI = {
       DB.s.person = document.getElementById("s-name").value.trim();
       DB.s.weekStart = Number(document.getElementById("s-ws").value);
       DB.s.round = Number(document.getElementById("s-rd").value);
+      DB.s.rate = Number(document.getElementById("s-rate").value || 0);
       DB.save(); this.paintWho(); this.toast("Saved"); this.render();
     };
 
@@ -2460,7 +2586,7 @@ const UI = {
       await Auth.signOut(scope);
       try{ localStorage.removeItem(KEY); localStorage.removeItem(AUTH); }catch(e){}
       DB.s = { entries: [], clients: {}, subs: [], person: "", url: "", key: "",
-               weekStart: 1, round: 0, mode: "clock", lock: null };
+               weekStart: 1, round: 0, mode: "clock", rate: 0, lock: null };
       this.signInScreen(scope==="global" ? "Signed out everywhere." : "Signed out. This device no longer holds a copy.");
     };
 
