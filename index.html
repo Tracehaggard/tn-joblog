@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-01c">
+<meta name="build" content="2026-08-01d">
 <title>TN Info Tech — Job Log</title>
 <style>
 :root{
@@ -198,6 +198,25 @@ pre.sql{background:#15171b;color:#d6dae0;padding:14px;border-radius:7px;font-fam
 ol.steps{margin:0 0 4px 18px;font-size:13.5px;color:var(--ink-2)}
 ol.steps li{margin-bottom:9px}
 
+/* client cards + picker */
+.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}
+.ccard{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:16px;text-align:left;transition:border-color .12s,box-shadow .12s;width:100%}
+.ccard:hover{border-color:var(--ink-2);box-shadow:0 3px 10px rgba(0,0,0,.06)}
+.ccard h3{font-size:15.5px;font-weight:660;letter-spacing:-.01em}
+.ccard .ad{font-size:12.5px;color:var(--ink-3);margin-top:3px;min-height:17px}
+.ccard .nums{display:flex;gap:16px;margin-top:13px;padding-top:12px;border-top:1px solid var(--line-2)}
+.ccard .nums div{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:650}
+.ccard .nums b{display:block;font-size:17px;letter-spacing:-.02em;color:var(--ink);margin-top:2px;font-weight:660}
+.kv{display:grid;grid-template-columns:112px 1fr;gap:9px 14px;font-size:14px}
+.kv dt{color:var(--ink-3);font-weight:600;font-size:12.5px;padding-top:1px}
+.kv dd{color:var(--ink)}
+.pick{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:7px;margin-top:10px}
+.pick button{display:block;width:100%;text-align:left;padding:11px 14px;border-bottom:1px solid var(--line-2)}
+.pick button:last-child{border-bottom:none}
+.pick button:hover{background:#f5f6f8}
+.pick b{font-size:14px;font-weight:640;display:block}
+.pick span{font-size:12px;color:var(--ink-3)}
+
 .rep{font-family:var(--mono);font-size:12.5px;line-height:1.6;white-space:pre-wrap;background:#fafbfc;border:1px solid var(--line);border-radius:7px;padding:16px;max-height:420px;overflow:auto}
 
 .mobtop{display:none}
@@ -239,6 +258,7 @@ ol.steps li{margin-bottom:9px}
     <nav class="nav" id="nav">
       <button data-v="log" class="on"><i class="dot"></i>New Entry</button>
       <button data-v="week"><i class="dot"></i>Week Report</button>
+      <button data-v="clients"><i class="dot"></i>Clients</button>
       <button data-v="find"><i class="dot"></i>History</button>
       <button data-v="set"><i class="dot"></i>Settings</button>
     </nav>
@@ -252,6 +272,7 @@ ol.steps li{margin-bottom:9px}
     <b>TN INFO TECH</b>
     <button data-v="log" class="on">New</button>
     <button data-v="week">Week</button>
+    <button data-v="clients">Clients</button>
     <button data-v="find">History</button>
     <button data-v="set">Settings</button>
   </div>
@@ -287,11 +308,31 @@ ol.steps li{margin-bottom:9px}
 const KEY = "tnit.joblog.v1";
 
 const DB = {
-  s: { entries: [], person: "", url: "", key: "", weekStart: 1, round: 0, mode: "clock" },
+  s: { entries: [], clients: {}, person: "", url: "", key: "", weekStart: 1, round: 0, mode: "clock" },
 
   load(){
     try{ const r = localStorage.getItem(KEY); if(r) Object.assign(this.s, JSON.parse(r)); }catch(e){}
     if(!Array.isArray(this.s.entries)) this.s.entries = [];
+    if(!this.s.clients || typeof this.s.clients !== "object") this.s.clients = {};
+    this.backfillClients();
+  },
+
+  /* any client that only exists inside old entries gets a real record */
+  backfillClients(){
+    let made = false;
+    this.live().forEach(e => {
+      const k = e.client.trim().toLowerCase();
+      if(!k) return;
+      if(!this.s.clients[k]){
+        this.s.clients[k] = { id:k, name:e.client.trim(), address:e.address||"",
+                              phone:"", contact:"", note:"",
+                              updated_at:new Date(0).toISOString(), deleted:false };
+        made = true;
+      } else if(!this.s.clients[k].address && e.address){
+        this.s.clients[k].address = e.address; made = true;
+      }
+    });
+    if(made) this.save();
   },
   save(){ localStorage.setItem(KEY, JSON.stringify(this.s)); },
 
@@ -310,7 +351,9 @@ const DB = {
       notes: e.notes.trim(), person: this.s.person || "",
       updated_at: new Date().toISOString(), deleted: false
     };
-    this.s.entries.push(row); this.save(); Cloud.push([row]); return row;
+    this.s.entries.push(row); this.save(); Cloud.push([row]);
+    this.saveClient({ name: row.client, address: row.address || undefined });  // keep the client record current
+    return row;
   },
   remove(id){
     const r = this.s.entries.find(x => x.id === id);
@@ -323,14 +366,66 @@ const DB = {
     this.live().forEach(e => seen.set(e.client.toLowerCase(), e.client));
     return [...seen.values()].sort((a,b)=>a.localeCompare(b));
   },
+  /* ---- client records ---- */
+  clientList(){
+    return Object.values(this.s.clients)
+      .filter(c => !c.deleted)
+      .sort((a,b)=> a.name.localeCompare(b.name));
+  },
+  getClient(name){
+    return this.s.clients[(name||"").trim().toLowerCase()] || null;
+  },
+  saveClient(c){
+    const k = c.name.trim().toLowerCase();
+    if(!k) return null;
+    const cur = this.s.clients[k] || { id:k, name:c.name.trim(), address:"", phone:"", contact:"", note:"", deleted:false };
+    const row = Object.assign(cur, {
+      id:k, name:c.name.trim(),
+      address: c.address !== undefined ? c.address : cur.address,
+      phone:   c.phone   !== undefined ? c.phone   : cur.phone,
+      contact: c.contact !== undefined ? c.contact : cur.contact,
+      note:    c.note    !== undefined ? c.note    : cur.note,
+      updated_at: new Date().toISOString(), deleted:false
+    });
+    this.s.clients[k] = row; this.save(); Cloud.push([row], "clients");
+    return row;
+  },
+  /* every visit for one client, newest first */
+  historyFor(name){
+    const k = (name||"").trim().toLowerCase();
+    return this.live().filter(e => e.client.trim().toLowerCase() === k)
+      .sort((a,b)=> b.work_date.localeCompare(a.work_date));
+  },
+  statsFor(name){
+    const list = this.historyFor(name);
+    return {
+      visits: list.length,
+      hours:  list.reduce((s,e)=> s + Number(e.hours), 0),
+      miles:  list.reduce((s,e)=> s + MI.of(e), 0),
+      last:   list.length ? list[0].work_date : "",
+      first:  list.length ? list[list.length-1].work_date : "",
+      list
+    };
+  },
   /* last address we recorded for this client */
   addressFor(client){
+    const rec = this.getClient(client);
+    if(rec && rec.address) return rec.address;
     const k = (client||"").trim().toLowerCase();
     if(!k) return "";
     const hit = this.live()
       .filter(e => e.client.toLowerCase() === k && (e.address||"").trim())
       .sort((a,b)=> (b.work_date+b.updated_at).localeCompare(a.work_date+a.updated_at))[0];
     return hit ? hit.address : "";
+  },
+  mergeClients(rows){
+    let n = 0;
+    rows.forEach(r => {
+      const cur = this.s.clients[r.id];
+      if(!cur || (r.updated_at||"") > (cur.updated_at||"")){ this.s.clients[r.id] = r; n++; }
+    });
+    if(n) this.save();
+    return n;
   },
   /* last odometer reading recorded anywhere */
   lastOdometer(){
@@ -357,7 +452,7 @@ const DB = {
    ========================================================= */
 const Cloud = {
   state: "off",           // off | ok | err
-  base(){ return DB.s.url.replace(/\/+$/,"") + "/rest/v1/entries"; },
+  base(t){ return DB.s.url.replace(/\/+$/,"") + "/rest/v1/" + (t || "entries"); },
   head(extra){
     return Object.assign({
       "apikey": DB.s.key,
@@ -375,6 +470,15 @@ const Cloud = {
   async pull(){
     if(!DB.linked()) { this.setState("off"); return 0; }
     try{
+      /* client records ride along, quietly */
+      fetch(this.base("clients")+"?select=*", { headers: this.head() })
+        .then(res => res.ok ? res.json() : [])
+        .then(cs => DB.mergeClients(cs.map(c => ({
+          id:c.id, name:c.name, address:c.address||"", phone:c.phone||"",
+          contact:c.contact||"", note:c.note||"", updated_at:c.updated_at||"", deleted:!!c.deleted
+        }))))
+        .catch(()=>{});
+
       const r = await fetch(this.base()+"?select=*", { headers: this.head() });
       if(!r.ok) throw new Error(await r.text());
       const rows = await r.json();
@@ -390,10 +494,10 @@ const Cloud = {
       return n;
     }catch(err){ this.setState("err", "Sync error"); console.warn("pull", err); return 0; }
   },
-  async push(rows){
+  async push(rows, table){
     if(!DB.linked() || !rows.length) return;
     try{
-      const r = await fetch(this.base(), {
+      const r = await fetch(this.base(table), {
         method:"POST",
         headers: this.head({ "Prefer":"resolution=merge-duplicates,return=minimal" }),
         body: JSON.stringify(rows)
@@ -402,7 +506,10 @@ const Cloud = {
       this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
     }catch(err){ this.setState("err","Sync error"); console.warn("push", err); }
   },
-  async pushAll(){ await this.push(DB.s.entries); },
+  async pushAll(){
+    await this.push(DB.s.entries);
+    await this.push(Object.values(DB.s.clients), "clients");
+  },
   async test(url, key){
     const r = await fetch(url.replace(/\/+$/,"")+"/rest/v1/entries?select=id&limit=1", {
       headers:{ apikey:key, Authorization:"Bearer "+key }
@@ -515,14 +622,17 @@ const UI = {
     const v = document.getElementById("view");
     if(this.view==="log")  { this.head("New Entry","Log where you were and what you did."); v.innerHTML = this.vLog(); this.wireLog(); }
     if(this.view==="week") { this.vWeek(v); }
+    if(this.view==="clients"){ this.vClients(v); }
     if(this.view==="find") { this.head("History","Every job, searchable."); v.innerHTML = this.vFind(); this.wireFind(); }
     if(this.view==="set")  { this.head("Settings","Your name, and shared access for the crew."); v.innerHTML = this.vSet(); this.wireSet(); }
   },
 
   /* ---------- NEW ENTRY ---------- */
   vLog(){
-    const cl = DB.clients();
+    const cl = DB.clientList().map(c=>c.name);
     const last = DB.lastOdometer();
+    const pre = this.prefill || {};
+    this.prefill = null;
     const recent = DB.live().slice().sort((a,b)=> (b.updated_at||"").localeCompare(a.updated_at||"")).slice(0,5);
     return `
     <div class="row" style="align-items:flex-start">
@@ -533,8 +643,8 @@ const UI = {
             <form id="f">
               <div class="grid2 mb">
                 <div>
-                  <label class="f" for="i-client">Client / Location</label>
-                  <input class="inp" id="i-client" list="cl" autocomplete="off" placeholder="Who did you work for?" required>
+                  <label class="f" for="i-client">Client / Location${cl.length?`<button type="button" class="nowbtn" id="pickBtn">SAVED CLIENTS ▾</button>`:""}</label>
+                  <input class="inp" id="i-client" list="cl" autocomplete="off" placeholder="Who did you work for?" required value="${esc(pre.client||"")}">
                   <datalist id="cl">${cl.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>
                 </div>
                 <div>
@@ -545,7 +655,7 @@ const UI = {
 
               <div class="mb">
                 <label class="f" for="i-address">Address <span style="font-weight:500;color:var(--ink-3)">— optional, remembered per client</span></label>
-                <input class="inp" id="i-address" placeholder="1420 Campbell St, Nashville TN" autocomplete="off">
+                <input class="inp" id="i-address" placeholder="1420 Campbell St, Nashville TN" autocomplete="off" value="${esc(pre.address||"")}">
               </div>
 
               <div class="mb">
@@ -673,6 +783,15 @@ const UI = {
     addr.addEventListener("input", ()=>{ addr.dataset.touched = addr.value ? "1" : ""; });
     client.addEventListener("change", fillAddr);
     client.addEventListener("blur", fillAddr);
+
+    /* saved-client dropdown */
+    const pickBtn = document.getElementById("pickBtn");
+    if(pickBtn) pickBtn.addEventListener("click", ()=> this.pickClient(name => {
+      client.value = name;
+      addr.dataset.touched = "";
+      addr.value = DB.addressFor(name);
+      document.getElementById(DB.s.mode === "clock" ? "i-start" : "i-hours").focus();
+    }));
 
     /* odometer */
     const ms = document.getElementById("i-mstart");
@@ -806,6 +925,7 @@ const UI = {
               <span class="hr tnum">${hFmt(g.hours)}h</span>
             </button>
             <div class="grp-b">
+              <button class="btn sm noprint" data-open="${esc(g.name)}" style="margin:6px 0 2px">View ${esc(g.name)}'s full file →</button>
               ${g.list.map(e=>`
                 <div class="ent">
                   <div class="d">${esc(D.dayLbl(e.work_date))}${T.range(e.start_time,e.end_time)?`<div class="times" style="font-weight:500;margin-top:2px">${esc(T.range(e.start_time,e.end_time))}</div>`:""}</div>
@@ -827,6 +947,10 @@ const UI = {
     v.querySelectorAll("[data-del]").forEach(b => b.onclick = e => {
       e.stopPropagation();
       if(confirm("Delete this entry?")){ DB.remove(b.dataset.del); this.render(); this.toast("Entry deleted"); }
+    });
+    v.querySelectorAll("[data-open]").forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      this.openClient = b.dataset.open; this.go("clients");
     });
   },
 
@@ -856,6 +980,172 @@ const UI = {
     catch(e){
       this.modal("Week Summary", `<div class="rep">${esc(t)}</div>`, `<button class="btn" onclick="UI.closeModal()">Done</button>`);
     }
+  },
+
+  /* ---------- CLIENTS ---------- */
+  openClient: null,
+
+  vClients(v){
+    if(this.openClient) return this.vClientDetail(v);
+
+    const list = DB.clientList().map(c => Object.assign({}, c, DB.statsFor(c.name)))
+                   .sort((a,b)=> (b.last||"").localeCompare(a.last||""));
+    this.head("Clients", list.length + " client" + (list.length===1?"":"s") + " on the books",
+      `<button class="btn dark" id="cNew">+ Add Client</button>`);
+
+    v.innerHTML = list.length ? `<div class="cgrid">${list.map(c=>`
+      <button class="ccard" data-c="${esc(c.name)}">
+        <h3>${esc(c.name)}</h3>
+        <div class="ad">${esc(c.address || "No address on file")}</div>
+        <div class="nums">
+          <div>Visits<b class="tnum">${c.visits}</b></div>
+          <div>Hours<b class="tnum">${hFmt(c.hours)}</b></div>
+          <div>Miles<b class="tnum">${MI.fmt(c.miles)}</b></div>
+        </div>
+        <div style="font-size:12px;color:var(--ink-3);margin-top:10px">
+          ${c.last ? "Last visit " + esc(D.dayLbl(c.last)) : "No visits logged yet"}
+        </div>
+      </button>`).join("")}</div>`
+      : `<div class="panel"><div class="empty"><b>No clients yet</b>They're created automatically the first time you log a job — or add one now.</div></div>`;
+
+    document.getElementById("cNew").onclick = ()=> this.editClient("");
+    v.querySelectorAll("[data-c]").forEach(b => b.onclick = ()=>{ this.openClient = b.dataset.c; this.render(); });
+  },
+
+  vClientDetail(v){
+    const name = this.openClient;
+    const c = DB.getClient(name) || { name, address:"", phone:"", contact:"", note:"" };
+    const st = DB.statsFor(name);
+
+    this.head(c.name, st.visits ? st.visits + " visits · " + hFmt(st.hours) + " hours · " + MI.fmt(st.miles) + " miles" : "No visits logged yet",
+      `<button class="btn" id="cBack">← All Clients</button>
+       <button class="btn" id="cEdit" style="margin-left:8px">Edit Details</button>
+       <button class="btn dark" id="cLog" style="margin-left:8px">Log a Job Here</button>`);
+
+    v.innerHTML = `
+      <div class="row" style="align-items:flex-start">
+        <div class="col" style="flex:1;min-width:280px;max-width:380px">
+          <div class="panel mb">
+            <div class="panel-h"><h2>Details</h2></div>
+            <div class="panel-b">
+              <dl class="kv">
+                <dt>Address</dt><dd>${c.address ? esc(c.address) : '<span style="color:var(--ink-3)">—</span>'}</dd>
+                <dt>Contact</dt><dd>${c.contact ? esc(c.contact) : '<span style="color:var(--ink-3)">—</span>'}</dd>
+                <dt>Phone</dt><dd>${c.phone ? `<a href="tel:${esc(c.phone)}" style="color:var(--accent);font-weight:600">${esc(c.phone)}</a>` : '<span style="color:var(--ink-3)">—</span>'}</dd>
+                <dt>First visit</dt><dd>${st.first ? esc(D.dayLbl(st.first)) : '<span style="color:var(--ink-3)">—</span>'}</dd>
+                <dt>Last visit</dt><dd>${st.last ? esc(D.dayLbl(st.last)) : '<span style="color:var(--ink-3)">—</span>'}</dd>
+              </dl>
+              ${c.note ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line-2)">
+                 <div class="f" style="margin-bottom:5px">Notes</div>
+                 <div style="font-size:14px;color:var(--ink-2);white-space:pre-wrap">${esc(c.note)}</div></div>` : ""}
+            </div>
+          </div>
+          ${c.address ? `<a class="btn" style="width:100%;justify-content:center" target="_blank" rel="noopener"
+             href="https://maps.google.com/?q=${encodeURIComponent(c.address)}">Open in Maps</a>` : ""}
+        </div>
+
+        <div class="col" style="flex:2;min-width:320px">
+          <div class="panel">
+            <div class="panel-h"><h2>Every Visit</h2>
+              <button class="btn sm" id="cCopy">Copy Client History</button></div>
+            ${st.list.length ? st.list.map(e=>`
+              <div class="res">
+                <div class="meta">
+                  <b>${esc(D.dayLbl(e.work_date))}</b>
+                  <span>${esc(D.parse(e.work_date).getFullYear())}${e.person?" · "+esc(e.person):""}
+                  ${T.range(e.start_time,e.end_time)?`<br>${esc(T.range(e.start_time,e.end_time))}`:""}
+                  ${MI.of(e)?`<br>${MI.fmt(MI.of(e))} mi`:""}</span>
+                </div>
+                <div class="txt">${esc(e.notes)}</div>
+                <div class="hh tnum">${hFmt(e.hours)}h</div>
+              </div>`).join("")
+            : `<div class="empty"><b>Nothing logged here yet</b>Jobs you save for ${esc(c.name)} will stack up here.</div>`}
+          </div>
+        </div>
+      </div>`;
+
+    document.getElementById("cBack").onclick = ()=>{ this.openClient = null; this.render(); };
+    document.getElementById("cEdit").onclick = ()=> this.editClient(c.name);
+    document.getElementById("cLog").onclick  = ()=>{
+      this.prefill = { client:c.name, address:c.address };
+      this.openClient = null; this.go("log");
+    };
+    document.getElementById("cCopy").onclick = async ()=>{
+      const L = [c.name.toUpperCase()];
+      if(c.address) L.push(c.address);
+      if(c.phone) L.push(c.phone);
+      L.push(st.visits + " visits · " + hFmt(st.hours) + " hours" + (st.miles?" · "+MI.fmt(st.miles)+" miles":""), "");
+      st.list.forEach(e=>{
+        const rng = T.range(e.start_time,e.end_time);
+        L.push(D.dayLbl(e.work_date) + "/" + D.parse(e.work_date).getFullYear() + (rng?" "+rng:"") + " (" + hFmt(e.hours) + "h) " + e.notes.replace(/\s*\n\s*/g," "));
+      });
+      const txt = L.join("\n");
+      try{ await navigator.clipboard.writeText(txt); this.toast("Client history copied"); }
+      catch(err){ this.modal(c.name, `<div class="rep">${esc(txt)}</div>`, `<button class="btn" onclick="UI.closeModal()">Done</button>`); }
+    };
+  },
+
+  editClient(name){
+    const c = DB.getClient(name) || { name:"", address:"", phone:"", contact:"", note:"" };
+    const isNew = !name;
+    this.modal(isNew ? "Add Client" : "Edit " + c.name,
+      `<div class="mb"><label class="f" for="e-name">Client name</label>
+         <input class="inp" id="e-name" value="${esc(c.name)}" ${isNew?"":"readonly style='background:#f6f7f8'"} placeholder="Riverbend Dental"></div>
+       <div class="mb"><label class="f" for="e-addr">Address</label>
+         <input class="inp" id="e-addr" value="${esc(c.address)}" placeholder="905 Gallatin Pike, Madison TN"></div>
+       <div class="grid2 mb">
+         <div><label class="f" for="e-contact">Contact person</label>
+           <input class="inp" id="e-contact" value="${esc(c.contact)}" placeholder="Dr. Combs"></div>
+         <div><label class="f" for="e-phone">Phone</label>
+           <input class="inp" id="e-phone" value="${esc(c.phone)}" placeholder="615-555-0147"></div>
+       </div>
+       <div><label class="f" for="e-note">Notes about this client</label>
+         <textarea class="inp" id="e-note" placeholder="Server closet is behind the front desk. Gate code 4412. Bill through the practice manager.">${esc(c.note)}</textarea></div>`,
+      `<button class="btn" onclick="UI.closeModal()">Cancel</button><button class="btn accent" id="e-save">Save Client</button>`);
+
+    document.getElementById("e-save").onclick = ()=>{
+      const nm = document.getElementById("e-name").value.trim();
+      if(!nm){ this.toast("Client needs a name"); return; }
+      DB.saveClient({
+        name: nm,
+        address: document.getElementById("e-addr").value.trim(),
+        contact: document.getElementById("e-contact").value.trim(),
+        phone:   document.getElementById("e-phone").value.trim(),
+        note:    document.getElementById("e-note").value.trim()
+      });
+      this.closeModal();
+      this.openClient = nm;
+      this.toast("Client saved");
+      this.render();
+    };
+  },
+
+  /* client picker used from the entry form */
+  pickClient(onPick){
+    const list = DB.clientList().map(c => Object.assign({}, c, DB.statsFor(c.name)))
+                   .sort((a,b)=> (b.last||"").localeCompare(a.last||""));
+    if(!list.length){ this.toast("No saved clients yet"); return; }
+
+    this.modal("Choose a Client",
+      `<input class="inp" id="pkq" placeholder="Type to filter…" autocomplete="off">
+       <div class="pick" id="pkl"></div>`, "");
+
+    const draw = (term="") => {
+      const t = term.toLowerCase();
+      const rows = list.filter(c => (c.name+" "+c.address).toLowerCase().includes(t));
+      document.getElementById("pkl").innerHTML = rows.length ? rows.map(c=>`
+        <button data-p="${esc(c.name)}">
+          <b>${esc(c.name)}</b>
+          <span>${esc(c.address || "No address")} · ${c.visits} visit${c.visits===1?"":"s"} · ${hFmt(c.hours)}h${c.last?" · last "+esc(D.dayLbl(c.last)):""}</span>
+        </button>`).join("")
+        : `<div class="empty" style="padding:26px">No match</div>`;
+      document.querySelectorAll("#pkl [data-p]").forEach(b => b.onclick = ()=>{
+        this.closeModal(); onPick(b.dataset.p);
+      });
+    };
+    document.getElementById("pkq").addEventListener("input", e => draw(e.target.value));
+    draw();
+    document.getElementById("pkq").focus();
   },
 
   /* ---------- HISTORY ---------- */
@@ -1082,9 +1372,24 @@ const UI = {
   deleted     boolean     default false
 );
 
+create table if not exists clients (
+  id          text primary key,
+  name        text        not null,
+  address     text        default '',
+  contact     text        default '',
+  phone       text        default '',
+  note        text        default '',
+  updated_at  timestamptz default now(),
+  deleted     boolean     default false
+);
+
 alter table entries enable row level security;
+alter table clients enable row level security;
 
 create policy "crew access" on entries
+  for all using (true) with check (true);
+
+create policy "crew access" on clients
   for all using (true) with check (true);`;
 
     this.modal("Connect the crew — 3 minutes",
