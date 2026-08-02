@@ -127,7 +127,7 @@ textarea.inp{resize:vertical;min-height:92px;line-height:1.5}
 .chip:hover{border-color:var(--ink-2)}
 .chip.on{background:var(--accent-soft);border-color:#f0c3a1;color:#9a3a05}
 
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:20px}
+.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:20px}
 .stat{background:var(--paper);padding:15px 18px}
 .stat .k{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650}
 .stat .v{font-size:26px;font-weight:660;letter-spacing:-.03em;margin-top:5px}
@@ -301,6 +301,9 @@ const DB = {
       id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random().toString(16).slice(2)),
       work_date: e.date, client: e.client.trim(), hours: Number(e.hours),
       start_time: e.start || "", end_time: e.end || "",
+      address: (e.address||"").trim(),
+      miles_start: e.milesStart === "" || e.milesStart == null ? null : Number(e.milesStart),
+      miles_end:   e.milesEnd   === "" || e.milesEnd   == null ? null : Number(e.milesEnd),
       notes: e.notes.trim(), person: this.s.person || "",
       updated_at: new Date().toISOString(), deleted: false
     };
@@ -316,6 +319,22 @@ const DB = {
     const seen = new Map();
     this.live().forEach(e => seen.set(e.client.toLowerCase(), e.client));
     return [...seen.values()].sort((a,b)=>a.localeCompare(b));
+  },
+  /* last address we recorded for this client */
+  addressFor(client){
+    const k = (client||"").trim().toLowerCase();
+    if(!k) return "";
+    const hit = this.live()
+      .filter(e => e.client.toLowerCase() === k && (e.address||"").trim())
+      .sort((a,b)=> (b.work_date+b.updated_at).localeCompare(a.work_date+a.updated_at))[0];
+    return hit ? hit.address : "";
+  },
+  /* last odometer reading recorded anywhere */
+  lastOdometer(){
+    const hit = this.live()
+      .filter(e => e.miles_end != null)
+      .sort((a,b)=> (b.work_date+(b.updated_at||"")).localeCompare(a.work_date+(a.updated_at||"")))[0];
+    return hit ? hit.miles_end : null;
   },
   merge(rows){
     let changed = 0;
@@ -359,6 +378,9 @@ const Cloud = {
       const n = DB.merge(rows.map(x => ({
         id:x.id, work_date:x.work_date, client:x.client, hours:Number(x.hours),
         start_time:x.start_time||"", end_time:x.end_time||"",
+        address:x.address||"",
+        miles_start: x.miles_start==null ? null : Number(x.miles_start),
+        miles_end:   x.miles_end==null   ? null : Number(x.miles_end),
         notes:x.notes||"", person:x.person||"", updated_at:x.updated_at||"", deleted:!!x.deleted
       })));
       this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
@@ -429,6 +451,16 @@ const T = {
   },
   range(a,b){ return (a&&b) ? T.label(a)+" – "+T.label(b) : ""; }
 };
+
+/* odometer helpers */
+const MI = {
+  of(e){
+    if(e.miles_start == null || e.miles_end == null) return 0;
+    const d = Number(e.miles_end) - Number(e.miles_start);
+    return d > 0 ? d : 0;
+  },
+  fmt(n){ return Number(n).toLocaleString(undefined,{maximumFractionDigits:1}); }
+};
 const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 /* =========================================================
@@ -487,6 +519,7 @@ const UI = {
   /* ---------- NEW ENTRY ---------- */
   vLog(){
     const cl = DB.clients();
+    const last = DB.lastOdometer();
     const recent = DB.live().slice().sort((a,b)=> (b.updated_at||"").localeCompare(a.updated_at||"")).slice(0,5);
     return `
     <div class="row" style="align-items:flex-start">
@@ -505,6 +538,11 @@ const UI = {
                   <label class="f" for="i-date">Date</label>
                   <input class="inp" id="i-date" type="date" value="${D.today()}" required>
                 </div>
+              </div>
+
+              <div class="mb">
+                <label class="f" for="i-address">Address <span style="font-weight:500;color:var(--ink-3)">— optional, remembered per client</span></label>
+                <input class="inp" id="i-address" placeholder="1420 Campbell St, Nashville TN" autocomplete="off">
               </div>
 
               <div class="mb">
@@ -535,6 +573,21 @@ const UI = {
                   <div class="chips" id="hchips">
                     ${[0.5,1,1.5,2,3,4,6,8].map(h=>`<button type="button" class="chip" data-h="${h}">${h}h</button>`).join("")}
                   </div>
+                </div>
+              </div>
+
+              <div class="mb">
+                <label class="f" style="margin-bottom:9px">Odometer <span style="font-weight:500;color:var(--ink-3)">— optional</span></label>
+                <div class="timerow">
+                  <div class="tf">
+                    <label class="f" for="i-mstart">Miles Start${last != null ? `<button type="button" class="nowbtn" id="lastOdo">LAST ${esc(MI.fmt(last))}</button>` : ""}</label>
+                    <input class="inp tnum" id="i-mstart" type="number" step="0.1" min="0" inputmode="decimal" placeholder="84231">
+                  </div>
+                  <div class="tf">
+                    <label class="f" for="i-mend">Miles End</label>
+                    <input class="inp tnum" id="i-mend" type="number" step="0.1" min="0" inputmode="decimal" placeholder="84259">
+                  </div>
+                  <div class="calc" id="mcalc"><b>—</b><span>Enter both odometer readings</span></div>
                 </div>
               </div>
 
@@ -607,6 +660,45 @@ const UI = {
     end.addEventListener("input", paint);
     paint();
 
+    /* address remembered per client */
+    const addr = document.getElementById("i-address");
+    const client = document.getElementById("i-client");
+    const fillAddr = () => {
+      const known = DB.addressFor(client.value);
+      if(known && !addr.dataset.touched) addr.value = known;
+    };
+    addr.addEventListener("input", ()=>{ addr.dataset.touched = addr.value ? "1" : ""; });
+    client.addEventListener("change", fillAddr);
+    client.addEventListener("blur", fillAddr);
+
+    /* odometer */
+    const ms = document.getElementById("i-mstart");
+    const me = document.getElementById("i-mend");
+    const mcalc = document.getElementById("mcalc");
+    const lastOdo = document.getElementById("lastOdo");
+    if(lastOdo) lastOdo.addEventListener("click", ()=>{ ms.value = DB.lastOdometer(); paintMiles(); me.focus(); });
+
+    const paintMiles = () => {
+      const a = ms.value === "" ? null : Number(ms.value);
+      const b = me.value === "" ? null : Number(me.value);
+      if(a === null || b === null){
+        mcalc.className = "calc";
+        mcalc.innerHTML = "<b>—</b><span>Enter both odometer readings</span>";
+        return;
+      }
+      const d = b - a;
+      if(d < 0){
+        mcalc.className = "calc";
+        mcalc.innerHTML = "<b style='font-size:14px;color:#c0392b'>End is lower than start</b><span>Check the readings</span>";
+        return;
+      }
+      mcalc.className = "calc live";
+      mcalc.innerHTML = "<b class='tnum'>" + MI.fmt(d) + " mi</b><span>round trip driven</span>";
+    };
+    ms.addEventListener("input", paintMiles);
+    me.addEventListener("input", paintMiles);
+    paintMiles();
+
     /* hours chips */
     document.querySelectorAll("#hchips .chip").forEach(c => c.addEventListener("click", ()=>{
       hours.value = c.dataset.h;
@@ -633,8 +725,14 @@ const UI = {
         if(!h){ this.toast("Enter the hours"); hours.focus(); return; }
       }
 
-      DB.add({ client, date, hours:h, notes, start:s, end:e });
-      this.toast("Saved — " + client + " · " + hFmt(h) + "h");
+      const mStart = ms.value === "" ? "" : Number(ms.value);
+      const mEnd   = me.value === "" ? "" : Number(me.value);
+      if(mStart !== "" && mEnd !== "" && mEnd < mStart){ this.toast("End odometer is lower than start"); me.focus(); return; }
+      const drove = (mStart !== "" && mEnd !== "") ? mEnd - mStart : 0;
+
+      DB.add({ client, date, hours:h, notes, start:s, end:e,
+               address: addr.value, milesStart:mStart, milesEnd:mEnd });
+      this.toast("Saved — " + client + " · " + hFmt(h) + "h" + (drove ? " · " + MI.fmt(drove) + " mi" : ""));
       this.render();
       document.getElementById("i-client").focus();
     });
@@ -656,14 +754,19 @@ const UI = {
     const map = new Map();
     rows.forEach(e => {
       const k = e.client.toLowerCase();
-      if(!map.has(k)) map.set(k, { name:e.client, hours:0, list:[] });
-      const g = map.get(k); g.hours += Number(e.hours); g.list.push(e);
+      if(!map.has(k)) map.set(k, { name:e.client, hours:0, miles:0, address:"", list:[] });
+      const g = map.get(k);
+      g.hours += Number(e.hours);
+      g.miles += MI.of(e);
+      if(!g.address && (e.address||"").trim()) g.address = e.address;
+      g.list.push(e);
     });
     const groups = [...map.values()].sort((x,y)=> y.hours - x.hours);
     groups.forEach(g => g.list.sort((x,y)=> x.work_date.localeCompare(y.work_date)));
     const total = rows.reduce((s,e)=> s + Number(e.hours), 0);
+    const miles = rows.reduce((s,e)=> s + MI.of(e), 0);
     const days  = new Set(rows.map(e=>e.work_date)).size;
-    return { a, b, rows, groups, total, days };
+    return { a, b, rows, groups, total, miles, days };
   },
 
   vWeek(v){
@@ -686,6 +789,7 @@ const UI = {
         <div class="stat"><div class="k">Clients</div><div class="v tnum">${w.groups.length}</div></div>
         <div class="stat"><div class="k">Days Worked</div><div class="v tnum">${w.days}</div></div>
         <div class="stat"><div class="k">Avg / Day</div><div class="v tnum">${w.days? hFmt(w.total/w.days):"0"}<small> h</small></div></div>
+        <div class="stat"><div class="k">Miles Driven</div><div class="v tnum">${MI.fmt(w.miles)}<small> mi</small></div></div>
       </div>
       <div class="panel">
         <div class="panel-h"><h2>By Client</h2><span class="hint" style="margin:0">Click a client to expand</span></div>
@@ -693,8 +797,8 @@ const UI = {
           <div class="grp${i===0?" open":""}">
             <button class="grp-h">
               <i class="car">▶</i>
-              <span class="nm">${esc(g.name)}</span>
-              <span class="ct">${g.list.length} visit${g.list.length>1?"s":""}</span>
+              <span class="nm">${esc(g.name)}${g.address?`<span style="font-weight:400;color:var(--ink-3);font-size:12.5px"> · ${esc(g.address)}</span>`:""}</span>
+              <span class="ct">${g.list.length} visit${g.list.length>1?"s":""}${g.miles?` · ${MI.fmt(g.miles)} mi`:""}</span>
               <span class="bar"><i style="width:${Math.max(6,(g.hours/max)*100)}%"></i></span>
               <span class="hr tnum">${hFmt(g.hours)}h</span>
             </button>
@@ -702,7 +806,7 @@ const UI = {
               ${g.list.map(e=>`
                 <div class="ent">
                   <div class="d">${esc(D.dayLbl(e.work_date))}${T.range(e.start_time,e.end_time)?`<div class="times" style="font-weight:500;margin-top:2px">${esc(T.range(e.start_time,e.end_time))}</div>`:""}</div>
-                  <div class="n">${esc(e.notes)}${e.person?`<span style="color:var(--ink-3);font-size:12px"> — ${esc(e.person)}</span>`:""}</div>
+                  <div class="n">${esc(e.notes)}${e.person?`<span style="color:var(--ink-3);font-size:12px"> — ${esc(e.person)}</span>`:""}${MI.of(e)?`<div class="times" style="margin-top:3px">${MI.fmt(MI.of(e))} mi &nbsp;<span style="font-weight:400">(${MI.fmt(e.miles_start)} → ${MI.fmt(e.miles_end)})</span></div>`:""}</div>
                   <div class="h tnum">${hFmt(e.hours)}h</div>
                   <button class="x noprint" data-del="${e.id}" title="Delete">✕</button>
                 </div>`).join("")}
@@ -727,13 +831,16 @@ const UI = {
     const w = this.weekData();
     const L = [];
     L.push("TN INFO TECH — WEEK OF " + D.short(w.a).toUpperCase() + " – " + D.short(w.b).toUpperCase());
-    L.push(hFmt(w.total) + " hours · " + w.groups.length + " clients · " + w.days + " days");
+    L.push(hFmt(w.total) + " hours · " + w.groups.length + " clients · " + w.days + " days"
+           + (w.miles ? " · " + MI.fmt(w.miles) + " miles" : ""));
     L.push("");
     w.groups.forEach(g => {
-      L.push(g.name.toUpperCase() + " — " + hFmt(g.hours) + "h");
+      L.push(g.name.toUpperCase() + " — " + hFmt(g.hours) + "h" + (g.miles ? " · " + MI.fmt(g.miles) + " mi" : ""));
+      if(g.address) L.push("  " + g.address);
       g.list.forEach(e => {
         const rng = T.range(e.start_time, e.end_time);
-        L.push("  " + D.dayLbl(e.work_date) + (rng ? " " + rng : "") + " (" + hFmt(e.hours) + "h) " + e.notes.replace(/\s*\n\s*/g," "));
+        const mi  = MI.of(e) ? " [" + MI.fmt(MI.of(e)) + " mi]" : "";
+        L.push("  " + D.dayLbl(e.work_date) + (rng ? " " + rng : "") + " (" + hFmt(e.hours) + "h)" + mi + " " + e.notes.replace(/\s*\n\s*/g," "));
       });
       L.push("");
     });
@@ -776,18 +883,19 @@ const UI = {
       const term=q.value.trim().toLowerCase(), cli=qc.value, sort=qs.value;
       let rows = DB.live();
       if(cli) rows = rows.filter(e=>e.client===cli);
-      if(term) rows = rows.filter(e=> (e.client+" "+e.notes+" "+(e.person||"")).toLowerCase().includes(term));
+      if(term) rows = rows.filter(e=> (e.client+" "+e.notes+" "+(e.person||"")+" "+(e.address||"")).toLowerCase().includes(term));
       rows.sort((a,b)=> sort==="hrs" ? b.hours-a.hours : sort==="old" ? a.work_date.localeCompare(b.work_date) : b.work_date.localeCompare(a.work_date));
 
       const hl = s => { const t=esc(s); if(!term) return t;
         return t.replace(new RegExp("("+term.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","ig"), "<mark>$1</mark>"); };
 
       const total = rows.reduce((s,e)=>s+Number(e.hours),0);
-      document.getElementById("rc").textContent = rows.length + " entr" + (rows.length===1?"y":"ies") + " · " + hFmt(total) + "h";
+      const miles = rows.reduce((s,e)=>s+MI.of(e),0);
+      document.getElementById("rc").textContent = rows.length + " entr" + (rows.length===1?"y":"ies") + " · " + hFmt(total) + "h" + (miles? " · "+MI.fmt(miles)+" mi" : "");
       document.getElementById("rl").innerHTML = rows.length ? rows.map(e=>`
         <div class="res">
-          <div class="meta"><b>${hl(e.client)}</b><span>${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}${T.range(e.start_time,e.end_time)?`<br>${esc(T.range(e.start_time,e.end_time))}`:""}</span></div>
-          <div class="txt">${hl(e.notes)}</div>
+          <div class="meta"><b>${hl(e.client)}</b><span>${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}${T.range(e.start_time,e.end_time)?`<br>${esc(T.range(e.start_time,e.end_time))}`:""}${MI.of(e)?`<br>${MI.fmt(MI.of(e))} mi`:""}</span></div>
+          <div class="txt">${e.address?`<div class="times" style="margin-bottom:4px">${hl(e.address)}</div>`:""}${hl(e.notes)}</div>
           <div class="hh tnum">${hFmt(e.hours)}h</div>
           <button class="btn ghost sm" data-del="${e.id}">✕</button>
         </div>`).join("")
@@ -800,8 +908,10 @@ const UI = {
     q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run);
     document.getElementById("csv").onclick = ()=>{
       const rows = DB.live().slice().sort((a,b)=>a.work_date.localeCompare(b.work_date));
-      const csv = ["Date,Client,Start,End,Hours,Logged By,Notes"].concat(rows.map(e =>
-        [e.work_date, e.client, T.label(e.start_time), T.label(e.end_time), e.hours, e.person||"", e.notes]
+      const csv = ["Date,Client,Address,Start,End,Hours,Miles Start,Miles End,Miles Driven,Logged By,Notes"].concat(rows.map(e =>
+        [e.work_date, e.client, e.address||"", T.label(e.start_time), T.label(e.end_time), e.hours,
+         e.miles_start==null?"":e.miles_start, e.miles_end==null?"":e.miles_end, MI.of(e)||"",
+         e.person||"", e.notes]
           .map(x=>`"${String(x).replace(/"/g,'""')}"`).join(",")
       )).join("\n");
       const a=document.createElement("a");
@@ -878,7 +988,7 @@ const UI = {
         <div class="panel-h"><h2>Your Data</h2></div>
         <div class="panel-b">
           <div style="font-size:14px;color:var(--ink-2);margin-bottom:12px">
-            <b class="tnum">${DB.live().length}</b> entries · <b class="tnum">${hFmt(DB.live().reduce((a,e)=>a+Number(e.hours),0))}</b> hours logged all-time
+            <b class="tnum">${DB.live().length}</b> entries · <b class="tnum">${hFmt(DB.live().reduce((a,e)=>a+Number(e.hours),0))}</b> hours · <b class="tnum">${MI.fmt(DB.live().reduce((a,e)=>a+MI.of(e),0))}</b> miles logged all-time
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn" id="s-export">Download Backup</button>
@@ -960,6 +1070,9 @@ const UI = {
   hours       numeric     not null,
   start_time  text        default '',
   end_time    text        default '',
+  address     text        default '',
+  miles_start numeric,
+  miles_end   numeric,
   notes       text        default '',
   person      text        default '',
   updated_at  timestamptz default now(),
