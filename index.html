@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02i">
+<meta name="build" content="2026-08-02j">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -513,9 +513,10 @@ const Auth = {
     return d;
   },
 
-  async signOut(){
+  /* scope "global" kills sessions on every device — for a lost phone */
+  async signOut(scope){
     try{
-      await fetch(SUPA_URL + "/auth/v1/logout", {
+      await fetch(SUPA_URL + "/auth/v1/logout" + (scope==="global" ? "?scope=global" : ""), {
         method:"POST",
         headers:{ "apikey":SUPA_KEY, "Authorization":"Bearer " + this.token }
       });
@@ -2418,8 +2419,9 @@ const UI = {
           <div class="mt" style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn" id="a-pass">Change Password</button>
             <button class="btn ghost" id="a-out">Sign Out</button>
+            <button class="btn ghost" id="a-outall" style="color:#c0392b">Sign Out Everywhere</button>
           </div>
-          <div class="hint" id="a-msg"></div>
+          <div class="hint">Signing out erases this device's local copy. <b>Sign Out Everywhere</b> ends the session on every phone and computer — use it if a device goes missing.</div>
         </div>
       </div>
 
@@ -2447,10 +2449,30 @@ const UI = {
     };
 
     /* ---- account ---- */
-    document.getElementById("a-out").onclick = async ()=>{
-      if(!confirm("Sign out on this device? Your entries stay in the shared database.")) return;
-      await Auth.signOut();
-      this.signInScreen("Signed out.");
+    /* signing out wipes the local copy so a shared or sold device keeps nothing */
+    const leave = async (scope) => {
+      if(DB.linked()){
+        try{ await Cloud.pushAll(); }
+        catch(e){
+          if(!confirm("Couldn't reach the server — anything logged offline may not be saved yet.\n\nSign out anyway?")) return;
+        }
+      }
+      await Auth.signOut(scope);
+      try{ localStorage.removeItem(KEY); localStorage.removeItem(AUTH); }catch(e){}
+      DB.s = { entries: [], clients: {}, subs: [], person: "", url: "", key: "",
+               weekStart: 1, round: 0, mode: "clock", lock: null };
+      this.signInScreen(scope==="global" ? "Signed out everywhere." : "Signed out. This device no longer holds a copy.");
+    };
+
+    document.getElementById("a-out").onclick = ()=>{
+      if(!confirm("Sign out on this device?\n\nThe local copy of your jobs is erased from this browser. Everything stays safe in the shared database.")) return;
+      leave();
+    };
+
+    const allOut = document.getElementById("a-outall");
+    if(allOut) allOut.onclick = ()=>{
+      if(!confirm("Sign out of EVERY device signed in as " + Auth.email + "?\n\nUse this if a phone or laptop went missing. Everyone will have to sign in again.")) return;
+      leave("global");
     };
 
     document.getElementById("a-pass").onclick = ()=>{
