@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02b">
+<meta name="build" content="2026-08-02c">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -369,6 +369,8 @@ ol.steps li{margin-bottom:9px}
 
 <div class="toast" id="toast"></div>
 
+<script src="config.js"></script>
+
 <div class="mask" id="mask">
   <div class="modal">
     <div class="modal-h"><h3 id="mTitle"></h3><button class="btn ghost sm" onclick="UI.closeModal()">Close</button></div>
@@ -384,36 +386,90 @@ ol.steps li{margin-bottom:9px}
    STORE  — offline-first, optional shared cloud table
    ========================================================= */
 const KEY  = "tnit.joblog.v1";
-const SESS = "tnit.unlock";      // this tab only, dies with the browser
-const TRUST= "tnit.trusted";     // "remember this device"
+const AUTH = "tnit.session";
+
+/* Public project config. The anon key grants nothing on its own —
+   every table requires a signed-in session (see RLS policies). */
+const SUPA_URL = "https://nhduyhaopyctmubzckpt.supabase.co";
+const SUPA_KEY = window.TNIT_KEY || "";
 
 /* =========================================================
-   LOCK — AES-GCM over the Supabase config, keyed by passcode
+   AUTH — email + password against Supabase GoTrue
    ========================================================= */
-const Lock = {
-  b64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); },
-  ub64(s){ return Uint8Array.from(atob(s), c => c.charCodeAt(0)); },
+const Auth = {
+  session: null,
 
-  async keyFrom(pass, salt){
-    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
-    return crypto.subtle.deriveKey(
-      { name:"PBKDF2", salt, iterations:150000, hash:"SHA-256" },
-      base, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]);
+  load(){
+    try{ this.session = JSON.parse(localStorage.getItem(AUTH) || "null"); }catch(e){ this.session = null; }
+    return this.session;
+  },
+  store(s){
+    this.session = s;
+    if(s) localStorage.setItem(AUTH, JSON.stringify(s));
+    else  localStorage.removeItem(AUTH);
+  },
+  get token(){ return this.session ? this.session.access_token : null; },
+  get email(){ return this.session && this.session.user ? this.session.user.email : ""; },
+  signedIn(){ return !!this.token; },
+
+  async post(path, body, extraHeaders){
+    const r = await fetch(SUPA_URL + "/auth/v1/" + path, {
+      method:"POST",
+      headers: Object.assign({ "apikey":SUPA_KEY, "Content-Type":"application/json" }, extraHeaders||{}),
+      body: JSON.stringify(body)
+    });
+    const data = await r.json().catch(()=> ({}));
+    if(!r.ok) throw new Error(data.error_description || data.msg || data.message || ("HTTP " + r.status));
+    return data;
   },
 
-  async encrypt(obj, pass){
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const iv   = crypto.getRandomValues(new Uint8Array(12));
-    const k    = await this.keyFrom(pass, salt);
-    const ct   = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, k,
-                   new TextEncoder().encode(JSON.stringify(obj)));
-    return { s:this.b64(salt), i:this.b64(iv), c:this.b64(ct) };
+  async signIn(email, password){
+    const s = await this.post("token?grant_type=password", { email:email.trim(), password });
+    s.expires_at = Date.now() + (s.expires_in || 3600) * 1000;
+    this.store(s);
+    return s;
   },
 
-  async decrypt(blob, pass){
-    const k  = await this.keyFrom(pass, this.ub64(blob.s));
-    const pt = await crypto.subtle.decrypt({ name:"AES-GCM", iv:this.ub64(blob.i) }, k, this.ub64(blob.c));
-    return JSON.parse(new TextDecoder().decode(pt));
+  async refresh(){
+    if(!this.session || !this.session.refresh_token) return false;
+    try{
+      const s = await this.post("token?grant_type=refresh_token", { refresh_token:this.session.refresh_token });
+      s.expires_at = Date.now() + (s.expires_in || 3600) * 1000;
+      this.store(s);
+      return true;
+    }catch(e){ this.store(null); return false; }
+  },
+
+  /* keep the token fresh; called before anything touches the database */
+  async ready(){
+    if(!this.session) return false;
+    if(this.session.expires_at && Date.now() > this.session.expires_at - 60000) return this.refresh();
+    return true;
+  },
+
+  async sendReset(email){
+    return this.post("recover", { email:email.trim() });
+  },
+
+  async setPassword(newPass){
+    const r = await fetch(SUPA_URL + "/auth/v1/user", {
+      method:"PUT",
+      headers:{ "apikey":SUPA_KEY, "Content-Type":"application/json", "Authorization":"Bearer " + this.token },
+      body: JSON.stringify({ password:newPass })
+    });
+    const d = await r.json().catch(()=> ({}));
+    if(!r.ok) throw new Error(d.msg || d.message || "Couldn't change the password");
+    return d;
+  },
+
+  async signOut(){
+    try{
+      await fetch(SUPA_URL + "/auth/v1/logout", {
+        method:"POST",
+        headers:{ "apikey":SUPA_KEY, "Authorization":"Bearer " + this.token }
+      });
+    }catch(e){}
+    this.store(null);
   }
 };
 
@@ -444,24 +500,9 @@ const DB = {
     });
     if(made) this.save();
   },
-  /* when a passcode is set, the Supabase config never touches disk in the clear */
-  save(){
-    const out = Object.assign({}, this.s);
-    if(this.s.lock){ out.url = ""; out.key = ""; }
-    localStorage.setItem(KEY, JSON.stringify(out));
-  },
+  save(){ localStorage.setItem(KEY, JSON.stringify(this.s)); },
 
-  /* pull the decrypted config back into memory for this session */
-  applyConfig(cfg, remember){
-    this.s.url = cfg.u; this.s.key = cfg.k;
-    try{ sessionStorage.setItem(SESS, JSON.stringify(cfg)); }catch(e){}
-    if(remember){ try{ localStorage.setItem(TRUST, JSON.stringify(cfg)); }catch(e){} }
-  },
-  forgetDevice(){
-    try{ sessionStorage.removeItem(SESS); localStorage.removeItem(TRUST); }catch(e){}
-  },
-
-  linked(){ return !!(this.s.url && this.s.key); },
+  linked(){ return Auth.signedIn(); },
 
   live(){ return this.s.entries.filter(e => !e.deleted); },
 
@@ -593,11 +634,11 @@ const DB = {
    ========================================================= */
 const Cloud = {
   state: "off",           // off | ok | err
-  base(t){ return DB.s.url.replace(/\/+$/,"") + "/rest/v1/" + (t || "entries"); },
+  base(t){ return SUPA_URL + "/rest/v1/" + (t || "entries"); },
   head(extra){
     return Object.assign({
-      "apikey": DB.s.key,
-      "Authorization": "Bearer " + DB.s.key,
+      "apikey": SUPA_KEY,
+      "Authorization": "Bearer " + (Auth.token || SUPA_KEY),
       "Content-Type": "application/json"
     }, extra||{});
   },
@@ -723,60 +764,92 @@ const UI = {
   who: "",          /* "" = everyone */
   draftHours: "",
 
-  boot(){
+  async boot(){
     DB.load();
+    Auth.load();
 
-    /* passcode gate */
-    if(DB.s.lock){
-      let cached = null;
-      try{ cached = JSON.parse(sessionStorage.getItem(SESS) || localStorage.getItem(TRUST) || "null"); }catch(e){}
-      if(cached && cached.u && cached.k){ DB.s.url = cached.u; DB.s.key = cached.k; }
-      else { this.lockScreen(); return; }
-    }
+    if(!Auth.signedIn()){ this.signInScreen(); return; }
+    await Auth.ready();                 // refresh the token if it's stale
+    if(!Auth.signedIn()){ this.signInScreen(); return; }
     this.start();
   },
 
-  lockScreen(){
-    document.querySelector(".rail").style.display = "none";
-    document.querySelector(".mobtop").style.display = "none";
-    document.querySelector(".top").style.display = "none";
+  chrome(show){
+    const d = show ? "" : "none";
+    document.querySelector(".rail").style.display = d;
+    document.querySelector(".mobtop").style.display = d;
+    document.querySelector(".top").style.display = d;
+  },
+
+  signInScreen(msg){
+    this.chrome(false);
     document.getElementById("view").innerHTML = `
-      <div style="min-height:70vh;display:grid;place-items:center;padding:20px">
-        <div class="panel" style="max-width:390px;width:100%">
-          <div style="padding:26px 26px 8px">
+      <div style="min-height:78vh;display:grid;place-items:center;padding:18px">
+        <div class="panel" style="max-width:400px;width:100%">
+          <div style="padding:28px 26px 6px">
             <div style="font-size:13px;letter-spacing:.14em;font-weight:700;color:var(--ink-3)">TN INFO TECH</div>
-            <h2 style="font-size:21px;margin-top:6px;letter-spacing:-.02em">Job Log</h2>
-            <p style="font-size:14px;color:var(--ink-3);margin-top:8px">Enter the crew passcode to open the log.</p>
+            <h2 style="font-size:22px;margin-top:6px;letter-spacing:-.02em">Job Log</h2>
+            <p style="font-size:14px;color:var(--ink-3);margin-top:8px">Sign in with your company email.</p>
           </div>
-          <div class="panel-b" style="padding-top:10px">
-            <form id="lockForm">
-              <input class="inp" id="lk" type="password" placeholder="Passcode" autocomplete="current-password" autofocus>
-              <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:var(--ink-2);cursor:pointer">
-                <input type="checkbox" id="lkRemember" style="width:15px;height:15px"> Remember this device
-              </label>
-              <div id="lkErr" class="hint" style="color:#c0392b;min-height:18px"></div>
-              <button class="btn accent" type="submit" style="width:100%;justify-content:center;padding:11px;margin-top:6px">Unlock</button>
+          <div class="panel-b" style="padding-top:14px">
+            <form id="siForm">
+              <div class="mb">
+                <label class="f" for="si-email">Email</label>
+                <input class="inp" id="si-email" type="email" autocomplete="username"
+                       inputmode="email" placeholder="you@tninfotech.com" required>
+              </div>
+              <div class="mb">
+                <label class="f" for="si-pass">Password</label>
+                <input class="inp" id="si-pass" type="password" autocomplete="current-password" required>
+              </div>
+              <div id="siMsg" class="hint" style="min-height:18px">${msg ? esc(msg) : ""}</div>
+              <button class="btn accent" type="submit" id="siGo"
+                      style="width:100%;justify-content:center;padding:12px;font-size:15px">Sign In</button>
             </form>
+            <button class="btn ghost sm" id="siForgot" style="width:100%;justify-content:center;margin-top:10px">
+              Forgot password?
+            </button>
           </div>
         </div>
       </div>`;
 
-    document.getElementById("lockForm").onsubmit = async ev => {
+    const msgBox = document.getElementById("siMsg");
+
+    document.getElementById("siForm").onsubmit = async ev => {
       ev.preventDefault();
-      const pass = document.getElementById("lk").value;
-      const err  = document.getElementById("lkErr");
-      err.textContent = "Checking…";
+      const btn = document.getElementById("siGo");
+      btn.disabled = true; btn.textContent = "Signing in…";
+      msgBox.style.color = "var(--ink-3)"; msgBox.textContent = "";
       try{
-        const cfg = await Lock.decrypt(DB.s.lock, pass);
-        DB.applyConfig(cfg, document.getElementById("lkRemember").checked);
-        document.querySelector(".rail").style.display = "";
-        document.querySelector(".top").style.display = "";
-        document.querySelector(".mobtop").style.display = "";
+        await Auth.signIn(document.getElementById("si-email").value,
+                          document.getElementById("si-pass").value);
+        if(!DB.s.person){
+          const nm = Auth.email.split("@")[0].replace(/[._-]+/g," ");
+          DB.s.person = nm.charAt(0).toUpperCase() + nm.slice(1);
+          DB.save();
+        }
+        this.chrome(true);
         this.start();
-        if(DB.linked()) Cloud.pull().then(()=> this.render());
+        Cloud.pull().then(()=> this.render());
+      }catch(err){
+        btn.disabled = false; btn.textContent = "Sign In";
+        msgBox.style.color = "#c0392b";
+        msgBox.textContent = /invalid/i.test(err.message)
+          ? "That email and password don't match."
+          : err.message;
+      }
+    };
+
+    document.getElementById("siForgot").onclick = async ()=>{
+      const email = document.getElementById("si-email").value.trim();
+      if(!email){ msgBox.style.color="#c0392b"; msgBox.textContent="Enter your email above first."; return; }
+      try{
+        await Auth.sendReset(email);
+        msgBox.style.color = "var(--good)";
+        msgBox.textContent = "Reset link sent — check " + email;
       }catch(e){
-        err.textContent = "That passcode doesn't match.";
-        document.getElementById("lk").select();
+        msgBox.style.color = "#c0392b";
+        msgBox.textContent = "Couldn't send the reset email.";
       }
     };
   },
@@ -788,22 +861,13 @@ const UI = {
     this.paintWho();
     this.go(DB.s.person ? "log" : "set");
 
-    /* say something about the invite link instead of failing silently */
-    if(window.__invite === "ok"){
-      setTimeout(()=> this.toast("Connected to the shared job log — add your name below"), 400);
-    } else if(window.__invite === "bad"){
-      setTimeout(()=> this.modal("That invite link didn't come through",
-        `<p style="font-size:14px;color:var(--ink-2);line-height:1.55">
-           The link was cut off somewhere between the text message and here, so this device isn't
-           connected to the shared log yet.</p>
-         <p style="font-size:14px;color:var(--ink-2);line-height:1.55;margin-top:10px">
-           Ask Trace to resend it, and open it by <b>pasting the whole thing into the address bar</b>
-           rather than tapping a preview. Or have him read you the two values from his Settings screen
-           and type them in below.</p>`,
-        `<button class="btn dark" onclick="UI.closeModal()">Got it</button>`), 500);
-    }
-    if(DB.linked()){ Cloud.pull().then(()=>this.render()); setInterval(()=>Cloud.pull().then(()=>{ if(this.view!=="log") this.render(); }), 60000); }
-    window.addEventListener("focus", () => { if(DB.linked()) Cloud.pull().then(()=>{ if(this.view!=="log") this.render(); }); });
+    const sync = () => Auth.ready().then(ok => {
+      if(!ok){ this.signInScreen("Your session expired — sign in again."); return; }
+      Cloud.pull().then(()=>{ if(this.view!=="log") this.render(); });
+    });
+    sync();
+    if(!this._syncTimer) this._syncTimer = setInterval(sync, 60000);
+    window.addEventListener("focus", sync);
   },
 
   go(v){
@@ -1626,54 +1690,17 @@ const UI = {
       </div>
 
       <div class="panel mb">
-        <div class="panel-h">
-          <h2>Shared Access ${DB.linked()?'<span style="color:var(--good);font-weight:600;font-size:12px"> · Connected</span>':''}</h2>
-          <button class="btn sm" id="s-how">Setup guide</button>
-        </div>
+        <div class="panel-h"><h2>Account <span style="color:var(--good);font-weight:600;font-size:12px"> · Signed in</span></h2></div>
         <div class="panel-b">
-          <p style="font-size:14px;color:var(--ink-2);margin-bottom:14px;max-width:640px">
-            Paste two values from a free Supabase project and every entry syncs to one shared table — you log a job on your phone, your dad sees it on his laptop. Leave blank and everything stays on this device.
-          </p>
-          <div class="grid2">
-            <div>
-              <label class="f" for="s-url">Project URL</label>
-              <input class="inp" id="s-url" value="${esc(s.url)}" placeholder="https://abcdefg.supabase.co" autocomplete="off">
-            </div>
-            <div>
-              <label class="f" for="s-key">Anon public key</label>
-              <input class="inp" id="s-key" value="${esc(s.key)}" placeholder="eyJhbGciOi…" autocomplete="off">
-            </div>
-          </div>
+          <dl class="kv" style="max-width:420px">
+            <dt>Signed in as</dt><dd style="font-weight:600">${esc(Auth.email)}</dd>
+            <dt>Sync</dt><dd id="s-syncline">Every entry saves to the shared TN Info Tech database.</dd>
+          </dl>
           <div class="mt" style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn accent" id="s-connect">Connect &amp; Sync</button>
-            ${DB.linked()?'<button class="btn" id="s-invite">Copy Invite Link for Dad</button>':''}
-            ${DB.linked()?'<button class="btn ghost" id="s-off">Disconnect</button>':''}
+            <button class="btn" id="a-pass">Change Password</button>
+            <button class="btn ghost" id="a-out">Sign Out</button>
           </div>
-          <div class="hint" id="s-msg"></div>
-        </div>
-      </div>
-
-      <div class="panel mb">
-        <div class="panel-h"><h2>Passcode Lock ${s.lock?'<span style="color:var(--good);font-weight:600;font-size:12px"> · On</span>':'<span style="color:var(--ink-3);font-weight:600;font-size:12px"> · Off</span>'}</h2></div>
-        <div class="panel-b">
-          ${s.lock ? `
-            <p style="font-size:14px;color:var(--ink-2);max-width:640px;margin-bottom:14px">
-              The log asks for a passcode before it opens, and your Supabase key is encrypted with it —
-              it isn't stored in the clear on this device, and it isn't inside the invite link either.
-            </p>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn" id="p-change">Change Passcode</button>
-              <button class="btn ghost" id="p-off">Turn Off Lock</button>
-              <button class="btn ghost" id="p-forget">Forget This Device</button>
-            </div>`
-          : `
-            <p style="font-size:14px;color:var(--ink-2);max-width:640px;margin-bottom:14px">
-              Add a passcode and the log won't open without it. Your Supabase key gets encrypted with the
-              passcode, so a stranger who finds the URL sees a locked door instead of your jobs.
-              ${DB.linked()?"":"<b>Connect Shared Access first</b> — the passcode protects that connection."}
-            </p>
-            <button class="btn accent" id="p-on"${DB.linked()?"":" disabled"}>Set a Passcode</button>`}
-          <div class="hint" id="p-msg"></div>
+          <div class="hint" id="a-msg"></div>
         </div>
       </div>
 
@@ -1700,115 +1727,28 @@ const UI = {
       DB.save(); this.paintWho(); this.toast("Saved"); this.render();
     };
 
-    document.getElementById("s-how").onclick = ()=> this.guide();
-
-    document.getElementById("s-connect").onclick = async ()=>{
-      const url = document.getElementById("s-url").value.trim();
-      const key = document.getElementById("s-key").value.trim();
-      const msg = document.getElementById("s-msg");
-      if(!url || !key){ msg.textContent = "Both fields are required."; return; }
-      msg.textContent = "Testing connection…";
-      try{
-        await Cloud.test(url, key);
-        DB.s.url = url; DB.s.key = key; DB.save();
-        await Cloud.pull(); await Cloud.pushAll();
-        this.paintWho(); this.toast("Connected — data is now shared");
-        this.render();
-      }catch(err){
-        msg.innerHTML = `<span style="color:#c0392b">Couldn't connect. Check the URL/key, and make sure the <b>entries</b> table exists (see Setup guide).</span>`;
-      }
+    /* ---- account ---- */
+    document.getElementById("a-out").onclick = async ()=>{
+      if(!confirm("Sign out on this device? Your entries stay in the shared database.")) return;
+      await Auth.signOut();
+      this.signInScreen("Signed out.");
     };
 
-    const inv = document.getElementById("s-invite");
-    if(inv) inv.onclick = async ()=>{
-      /* locked? send the encrypted blob — the key never rides in the link */
-      const payload = DB.s.lock ? { e: DB.s.lock } : { u: DB.s.url, k: DB.s.key };
-      const link = location.origin + location.pathname + "#join=" + btoa(JSON.stringify(payload));
-
-      this.modal(DB.s.lock ? "Invite Link (passcode protected)" : "Invite Link for Dad",
-        `<p style="font-size:14px;color:var(--ink-2);margin-bottom:12px">
-           ${DB.s.lock
-             ? "Send him this link, then tell him the passcode <b>separately</b> — say it out loud or call him. The link alone is useless without it."
-             : "Text or email this to your dad. He opens it, types his name in Settings, and he's in."}</p>
-         <textarea id="invBox" class="inp" style="font-family:var(--mono);font-size:11px;min-height:110px" readonly></textarea>
-         <p class="hint">${DB.s.lock
-             ? "The key inside this link is encrypted. Don't send the passcode in the same message."
-             : "Anyone with this link can read and write the job log."}</p>`,
-        `<button class="btn accent" id="invCopy">Copy Link</button><button class="btn" onclick="UI.closeModal()">Close</button>`);
-
-      const box = document.getElementById("invBox");
-      box.value = link;
-      box.onclick = function(){ this.select(); };
-      document.getElementById("invCopy").onclick = async ()=>{
-        box.select();
-        try{ await navigator.clipboard.writeText(box.value); }catch(e){ document.execCommand("copy"); }
-        this.toast("Invite link copied");
+    document.getElementById("a-pass").onclick = ()=>{
+      this.modal("Change Password",
+        `<div class="mb"><label class="f" for="np1">New password</label>
+           <input class="inp" id="np1" type="password" autocomplete="new-password"></div>
+         <div><label class="f" for="np2">Confirm</label>
+           <input class="inp" id="np2" type="password" autocomplete="new-password"></div>
+         <p class="hint">At least 8 characters.</p>`,
+        `<button class="btn" onclick="UI.closeModal()">Cancel</button><button class="btn accent" id="npGo">Update Password</button>`);
+      document.getElementById("npGo").onclick = async ()=>{
+        const a = document.getElementById("np1").value, b = document.getElementById("np2").value;
+        if(a.length < 8){ this.toast("Use at least 8 characters"); return; }
+        if(a !== b){ this.toast("Passwords don't match"); return; }
+        try{ await Auth.setPassword(a); this.closeModal(); this.toast("Password updated"); }
+        catch(e){ this.toast(e.message); }
       };
-    };
-
-    const off = document.getElementById("s-off");
-    if(off) off.onclick = ()=>{
-      if(!confirm("Disconnect from the shared table? Local entries stay on this device.")) return;
-      DB.s.url=""; DB.s.key=""; DB.save(); Cloud.setState("off","Local only"); this.render(); this.toast("Disconnected");
-    };
-
-    /* ---- passcode lock ---- */
-    const setPass = (title, verifyFirst) => {
-      this.modal(title,
-        `${verifyFirst?`<div class="mb"><label class="f" for="p-cur">Current passcode</label>
-            <input class="inp" id="p-cur" type="password" autocomplete="current-password"></div>`:""}
-         <div class="mb"><label class="f" for="p-new">New passcode</label>
-           <input class="inp" id="p-new" type="password" autocomplete="new-password" placeholder="Something you'll both remember"></div>
-         <div><label class="f" for="p-new2">Confirm</label>
-           <input class="inp" id="p-new2" type="password" autocomplete="new-password"></div>
-         <p class="hint" style="color:#9a3a05"><b>Write it down.</b> There's no reset — if you both forget it,
-            this device has to be reconnected from the Supabase dashboard.</p>`,
-        `<button class="btn" onclick="UI.closeModal()">Cancel</button><button class="btn accent" id="p-save">Save Passcode</button>`);
-
-      document.getElementById("p-save").onclick = async ()=>{
-        const a = document.getElementById("p-new").value;
-        const b = document.getElementById("p-new2").value;
-        if(a.length < 4){ this.toast("Use at least 4 characters"); return; }
-        if(a !== b){ this.toast("The two passcodes don't match"); return; }
-
-        if(verifyFirst){
-          try{ await Lock.decrypt(DB.s.lock, document.getElementById("p-cur").value); }
-          catch(e){ this.toast("Current passcode is wrong"); return; }
-        }
-        DB.s.lock = await Lock.encrypt({ u:DB.s.url, k:DB.s.key }, a);
-        DB.save();                       // strips the plaintext config from disk
-        DB.applyConfig({ u:DB.s.url, k:DB.s.key }, true);   // stay unlocked here
-        this.closeModal(); this.toast("Passcode set — the key is encrypted now"); this.render();
-      };
-    };
-
-    const on = document.getElementById("p-on");
-    if(on) on.onclick = ()=> setPass("Set a Passcode", false);
-
-    const ch = document.getElementById("p-change");
-    if(ch) ch.onclick = ()=> setPass("Change Passcode", true);
-
-    const lockOff = document.getElementById("p-off");
-    if(lockOff) lockOff.onclick = ()=> {
-      this.modal("Turn Off Lock",
-        `<div><label class="f" for="p-off-cur">Enter the current passcode</label>
-           <input class="inp" id="p-off-cur" type="password" autocomplete="current-password"></div>
-         <p class="hint">The log will open without a passcode after this, and the Supabase key goes back to
-            being stored in the clear on each device.</p>`,
-        `<button class="btn" onclick="UI.closeModal()">Cancel</button><button class="btn" id="p-off-go" style="color:#c0392b">Turn Off</button>`);
-      document.getElementById("p-off-go").onclick = async ()=>{
-        try{
-          const cfg = await Lock.decrypt(DB.s.lock, document.getElementById("p-off-cur").value);
-          DB.s.lock = null; DB.s.url = cfg.u; DB.s.key = cfg.k; DB.save(); DB.forgetDevice();
-          this.closeModal(); this.toast("Lock turned off"); this.render();
-        }catch(e){ this.toast("That passcode is wrong"); }
-      };
-    };
-
-    const forget = document.getElementById("p-forget");
-    if(forget) forget.onclick = ()=>{
-      DB.forgetDevice();
-      this.toast("This device will ask for the passcode next time");
     };
 
     document.getElementById("s-export").onclick = ()=>{
@@ -1832,63 +1772,6 @@ const UI = {
     };
   },
 
-  guide(){
-    const sql =
-`create table if not exists entries (
-  id          uuid primary key,
-  work_date   date        not null,
-  client      text        not null,
-  hours       numeric     not null,
-  start_time  text        default '',
-  end_time    text        default '',
-  address     text        default '',
-  miles_start numeric,
-  miles_end   numeric,
-  notes       text        default '',
-  person      text        default '',
-  updated_at  timestamptz default now(),
-  deleted     boolean     default false
-);
-
-create table if not exists clients (
-  id          text primary key,
-  name        text        not null,
-  address     text        default '',
-  contact     text        default '',
-  phone       text        default '',
-  note        text        default '',
-  updated_at  timestamptz default now(),
-  deleted     boolean     default false
-);
-
-alter table entries enable row level security;
-alter table clients enable row level security;
-
-create policy "crew access" on entries
-  for all using (true) with check (true);
-
-create policy "crew access" on clients
-  for all using (true) with check (true);`;
-
-    this.modal("Connect the crew — 3 minutes",
-      `<ol class="steps">
-         <li>Go to <b>supabase.com</b> → sign up (free) → <b>New project</b>. Any name, any database password. Wait ~1 minute for it to spin up.</li>
-         <li>Open <b>SQL Editor</b> in the left sidebar → <b>New query</b> → paste this → <b>Run</b>:</li>
-       </ol>
-       <pre class="sql" id="sqlBox">${esc(sql)}</pre>
-       <ol class="steps" start="3" style="margin-top:12px">
-         <li>Go to <b>Project Settings → API</b>. Copy the <b>Project URL</b> and the <b>anon public</b> key.</li>
-         <li>Paste both here in Settings → <b>Connect &amp; Sync</b>.</li>
-         <li>Hit <b>Copy Invite Link for Dad</b> and text it to him. He opens the link, types his name, and he's in — same data, no signup.</li>
-       </ol>
-       <p class="hint">Anyone with that link can read and write the log, so treat it like a key to the shop.</p>`,
-      `<button class="btn" id="cpSql">Copy SQL</button><button class="btn dark" onclick="UI.closeModal()">Got it</button>`);
-
-    document.getElementById("cpSql").onclick = async ()=>{
-      try{ await navigator.clipboard.writeText(sql); this.toast("SQL copied"); }catch(e){}
-    };
-  },
-
   modal(title, body, foot){
     document.getElementById("mTitle").textContent = title;
     document.getElementById("mBody").innerHTML = body;
@@ -1900,46 +1783,6 @@ create policy "crew access" on clients
 
 document.getElementById("mask").addEventListener("click", e => { if(e.target.id==="mask") UI.closeModal(); });
 
-/* invite link handoff — forgiving about how the link survived the trip */
-window.__invite = null;
-(function(){
-  let h = location.hash || "";
-  if(!h || h.indexOf("join") === -1) return;
-  try{ h = decodeURIComponent(h); }catch(e){}
-
-  /* tolerate "#join=", "#join", stray spaces, and line breaks from copy/paste */
-  const m = h.match(/join=?\s*([\s\S]+)$/);
-  if(!m){ window.__invite = "bad"; return; }
-  const raw = m[1].replace(/\s+/g,"").replace(/[&?].*$/,"");
-
-  const apply = (u,k) => {
-    DB.load(); DB.s.url = u; DB.s.key = k; DB.save();
-    history.replaceState(null,"",location.pathname);
-    window.__invite = "ok";
-  };
-
-  /* normal case: base64 of {"u":...,"k":...}, or {"e":<encrypted blob>} */
-  try{
-    const cfg = JSON.parse(atob(raw));
-    if(cfg.e && cfg.e.c){                       // passcode-protected invite
-      DB.load(); DB.s.lock = cfg.e; DB.s.url = ""; DB.s.key = "";
-      DB.forgetDevice(); DB.save();
-      history.replaceState(null,"",location.pathname);
-      window.__invite = "locked"; return;
-    }
-    if(cfg.u && cfg.k){ apply(cfg.u, cfg.k); return; }
-  }catch(e){}
-
-  /* fallback: someone pasted the raw key — derive the project URL from it */
-  if(/^eyJ[\w-]+\.[\w-]+\./.test(raw)){
-    try{
-      const body = JSON.parse(atob(raw.split(".")[1].replace(/-/g,"+").replace(/_/g,"/")));
-      if(body.ref){ apply("https://" + body.ref + ".supabase.co", raw); return; }
-    }catch(e){}
-  }
-
-  window.__invite = "bad";
-})();
 
 UI.boot();
 
