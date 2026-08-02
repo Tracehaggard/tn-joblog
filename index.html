@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14161a">
+<title>TN Info Tech — Job Log</title>
+<style>
+:root{
+  --ink:#15171b;
+  --ink-2:#3d434d;
+  --ink-3:#6b7280;
+  --line:#e3e5e9;
+  --line-2:#eef0f3;
+  --paper:#ffffff;
+  --bg:#f5f6f8;
+  --rail:#15171b;
+  --rail-2:#1d2027;
+  --accent:#e8590c;
+  --accent-soft:#fdf1e9;
+  --good:#137a4f;
+  --radius:8px;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--sans);
+  background:var(--bg);
+  color:var(--ink);
+  -webkit-font-smoothing:antialiased;
+  font-size:15px;
+  line-height:1.45;
+}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:none}
+a{color:inherit}
+.tnum{font-variant-numeric:tabular-nums}
+
+/* ---------- shell ---------- */
+.shell{display:flex;min-height:100vh}
+.rail{
+  width:236px;flex:0 0 236px;background:var(--rail);color:#a8afba;
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
+}
+.brand{padding:22px 20px 18px;border-bottom:1px solid rgba(255,255,255,.07)}
+.brand b{display:block;color:#fff;font-size:14px;letter-spacing:.14em;font-weight:700}
+.brand small{display:block;color:#727a86;font-size:11px;letter-spacing:.1em;margin-top:5px;text-transform:uppercase}
+.nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px}
+.nav button{
+  display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  padding:9px 12px;border-radius:6px;color:#a8afba;font-size:14px;font-weight:500;
+  transition:background .12s,color .12s;
+}
+.nav button:hover{background:rgba(255,255,255,.05);color:#e6e9ee}
+.nav button.on{background:var(--rail-2);color:#fff}
+.nav button.on .dot{background:var(--accent)}
+.dot{width:5px;height:5px;border-radius:50%;background:#3b414c;flex:0 0 5px}
+.rail-foot{margin-top:auto;padding:14px;border-top:1px solid rgba(255,255,255,.07);font-size:12px;color:#6a7280}
+.who{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.who .av{width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700}
+.who span{color:#c3c9d2;font-size:13px}
+.syncdot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#4b525c;margin-right:6px;vertical-align:middle}
+.syncdot.live{background:#22c55e}
+.syncdot.err{background:#ef4444}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.top{
+  background:var(--paper);border-bottom:1px solid var(--line);
+  padding:18px 28px;display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;
+}
+.top h1{font-size:20px;letter-spacing:-.02em;font-weight:650}
+.top p{color:var(--ink-3);font-size:13px;margin-top:3px}
+.wrap{padding:24px 28px 60px;max-width:1180px;width:100%}
+
+/* ---------- bits ---------- */
+.btn{
+  display:inline-flex;align-items:center;gap:7px;padding:9px 14px;border-radius:6px;
+  font-size:13.5px;font-weight:600;border:1px solid var(--line);background:var(--paper);color:var(--ink);
+  transition:border-color .12s,background .12s;
+}
+.btn:hover{border-color:#c9cdd4;background:#fbfbfc}
+.btn.dark{background:var(--ink);border-color:var(--ink);color:#fff}
+.btn.dark:hover{background:#000;border-color:#000}
+.btn.accent{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.accent:hover{background:#d24f07;border-color:#d24f07}
+.btn.sm{padding:6px 10px;font-size:12.5px}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink-3)}
+.btn.ghost:hover{background:#eceef1;color:var(--ink)}
+.btn[disabled]{opacity:.5;pointer-events:none}
+
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
+.panel-h{padding:14px 18px;border-bottom:1px solid var(--line-2);display:flex;align-items:center;justify-content:space-between;gap:12px}
+.panel-h h2{font-size:14px;font-weight:650;letter-spacing:.01em}
+.panel-b{padding:18px}
+
+label.f{display:block;font-size:12px;font-weight:600;color:var(--ink-2);letter-spacing:.02em;margin-bottom:6px}
+.inp{
+  width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:6px;background:#fff;
+  transition:border-color .12s,box-shadow .12s;font-size:14.5px;
+}
+.inp:focus{outline:none;border-color:var(--ink-2);box-shadow:0 0 0 3px rgba(21,23,27,.07)}
+textarea.inp{resize:vertical;min-height:92px;line-height:1.5}
+.hint{font-size:12px;color:var(--ink-3);margin-top:6px}
+
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{padding:5px 10px;border:1px solid var(--line);border-radius:999px;font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.chip:hover{border-color:var(--ink-2)}
+.chip.on{background:var(--accent-soft);border-color:#f0c3a1;color:#9a3a05}
+
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:20px}
+.stat{background:var(--paper);padding:15px 18px}
+.stat .k{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650}
+.stat .v{font-size:26px;font-weight:660;letter-spacing:-.03em;margin-top:5px}
+.stat .v small{font-size:14px;font-weight:600;color:var(--ink-3);letter-spacing:0}
+
+.weekbar{display:flex;align-items:center;gap:8px}
+.weekbar .rng{font-size:14px;font-weight:650;min-width:172px;text-align:center}
+
+/* client group */
+.grp{border-bottom:1px solid var(--line-2)}
+.grp:last-child{border-bottom:none}
+.grp-h{display:flex;align-items:center;gap:14px;padding:13px 18px;width:100%;text-align:left;transition:background .1s}
+.grp-h:hover{background:#fafbfc}
+.grp-h .car{color:var(--ink-3);font-size:10px;transition:transform .15s;flex:0 0 10px}
+.grp.open .grp-h .car{transform:rotate(90deg)}
+.grp-h .nm{font-weight:640;font-size:14.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grp-h .ct{font-size:12px;color:var(--ink-3);flex:0 0 auto}
+.grp-h .hr{font-weight:680;font-size:15px;flex:0 0 auto;min-width:62px;text-align:right}
+.bar{height:4px;background:var(--line-2);border-radius:2px;flex:0 0 110px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:2px}
+.grp-b{display:none;padding:2px 18px 16px 42px}
+.grp.open .grp-b{display:block}
+.ent{display:flex;gap:14px;padding:10px 0;border-top:1px solid var(--line-2)}
+.ent .d{flex:0 0 92px;font-size:12.5px;color:var(--ink-3);font-weight:600;padding-top:1px}
+.ent .n{flex:1;font-size:14px;color:var(--ink-2);white-space:pre-wrap;word-break:break-word}
+.ent .h{flex:0 0 auto;font-size:13px;font-weight:660}
+.ent .x{flex:0 0 auto;opacity:0;color:var(--ink-3);font-size:12px;padding:0 4px}
+.ent:hover .x{opacity:1}
+.ent .x:hover{color:#c0392b}
+
+.empty{padding:44px 18px;text-align:center;color:var(--ink-3);font-size:14px}
+.empty b{display:block;color:var(--ink-2);font-size:15px;margin-bottom:4px;font-weight:640}
+
+.row{display:flex;gap:14px;flex-wrap:wrap}
+.col{flex:1;min-width:180px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.mt{margin-top:16px}
+.mb{margin-bottom:16px}
+
+.res{display:flex;gap:16px;padding:14px 18px;border-bottom:1px solid var(--line-2);align-items:flex-start}
+.res:last-child{border-bottom:none}
+.res:hover{background:#fafbfc}
+.res .meta{flex:0 0 150px}
+.res .meta b{display:block;font-size:14px;font-weight:650}
+.res .meta span{font-size:12.5px;color:var(--ink-3)}
+.res .txt{flex:1;font-size:14px;color:var(--ink-2);white-space:pre-wrap;word-break:break-word}
+.res .hh{flex:0 0 auto;font-weight:660;font-size:14px}
+mark{background:#fff2b8;color:inherit;padding:0 1px;border-radius:2px}
+
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translate(-50%,14px);opacity:0;pointer-events:none;
+  background:var(--ink);color:#fff;padding:10px 16px;border-radius:7px;font-size:13.5px;font-weight:550;
+  transition:opacity .18s,transform .18s;z-index:80;box-shadow:0 8px 24px rgba(0,0,0,.22);
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+.mask{position:fixed;inset:0;background:rgba(15,17,20,.45);display:none;z-index:90;padding:24px;overflow:auto}
+.mask.show{display:block}
+.modal{background:var(--paper);max-width:560px;margin:40px auto;border-radius:10px;overflow:hidden}
+.modal-h{padding:16px 20px;border-bottom:1px solid var(--line-2);display:flex;justify-content:space-between;align-items:center}
+.modal-h h3{font-size:15px;font-weight:650}
+.modal-b{padding:20px;max-height:64vh;overflow:auto}
+.modal-f{padding:14px 20px;border-top:1px solid var(--line-2);display:flex;justify-content:flex-end;gap:8px;background:#fafbfc}
+pre.sql{background:#15171b;color:#d6dae0;padding:14px;border-radius:7px;font-family:var(--mono);font-size:11.5px;line-height:1.55;overflow:auto;white-space:pre}
+ol.steps{margin:0 0 4px 18px;font-size:13.5px;color:var(--ink-2)}
+ol.steps li{margin-bottom:9px}
+
+.rep{font-family:var(--mono);font-size:12.5px;line-height:1.6;white-space:pre-wrap;background:#fafbfc;border:1px solid var(--line);border-radius:7px;padding:16px;max-height:420px;overflow:auto}
+
+.mobtop{display:none}
+
+@media(max-width:860px){
+  .rail{display:none}
+  .mobtop{display:flex;position:sticky;top:0;z-index:50;background:var(--rail);color:#fff;padding:10px 14px;gap:6px;align-items:center;overflow-x:auto}
+  .mobtop b{font-size:12px;letter-spacing:.12em;margin-right:6px;white-space:nowrap}
+  .mobtop button{color:#a8afba;font-size:13px;font-weight:600;padding:6px 10px;border-radius:6px;white-space:nowrap}
+  .mobtop button.on{background:rgba(255,255,255,.12);color:#fff}
+  .top{padding:14px 16px}
+  .wrap{padding:16px 16px 50px}
+  .stats{grid-template-columns:1fr 1fr}
+  .grid2{grid-template-columns:1fr}
+  .grp-h .ct,.bar{display:none}
+  .grp-b{padding-left:18px}
+  .ent{flex-wrap:wrap}
+  .ent .d{flex:0 0 auto}
+  .res{flex-wrap:wrap}
+  .res .meta{flex:0 0 auto}
+}
+@media print{
+  .rail,.mobtop,.top,.noprint{display:none!important}
+  body{background:#fff}
+  .wrap{padding:0;max-width:none}
+  .panel{border:none}
+  .grp-b{display:block!important}
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">
+      <b>TN INFO TECH</b>
+      <small>Job Log</small>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-v="log" class="on"><i class="dot"></i>New Entry</button>
+      <button data-v="week"><i class="dot"></i>Week Report</button>
+      <button data-v="find"><i class="dot"></i>History</button>
+      <button data-v="set"><i class="dot"></i>Settings</button>
+    </nav>
+    <div class="rail-foot">
+      <div class="who"><div class="av" id="avatar">?</div><span id="whoName">Set your name</span></div>
+      <div><span class="syncdot" id="syncDot"></span><span id="syncTxt">Local only</span></div>
+    </div>
+  </aside>
+
+  <div class="mobtop" id="mobnav">
+    <b>TN INFO TECH</b>
+    <button data-v="log" class="on">New</button>
+    <button data-v="week">Week</button>
+    <button data-v="find">History</button>
+    <button data-v="set">Settings</button>
+  </div>
+
+  <main class="main">
+    <header class="top">
+      <div>
+        <h1 id="ttl">New Entry</h1>
+        <p id="sub">Log where you were and what you did.</p>
+      </div>
+      <div id="topAct"></div>
+    </header>
+    <div class="wrap" id="view"></div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="mask" id="mask">
+  <div class="modal">
+    <div class="modal-h"><h3 id="mTitle"></h3><button class="btn ghost sm" onclick="UI.closeModal()">Close</button></div>
+    <div class="modal-b" id="mBody"></div>
+    <div class="modal-f" id="mFoot"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* =========================================================
+   STORE  — offline-first, optional shared cloud table
+   ========================================================= */
+const KEY = "tnit.joblog.v1";
+
+const DB = {
+  s: { entries: [], person: "", url: "", key: "", weekStart: 1 },
+
+  load(){
+    try{ const r = localStorage.getItem(KEY); if(r) Object.assign(this.s, JSON.parse(r)); }catch(e){}
+    if(!Array.isArray(this.s.entries)) this.s.entries = [];
+  },
+  save(){ localStorage.setItem(KEY, JSON.stringify(this.s)); },
+
+  linked(){ return !!(this.s.url && this.s.key); },
+
+  live(){ return this.s.entries.filter(e => !e.deleted); },
+
+  add(e){
+    const row = {
+      id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random().toString(16).slice(2)),
+      work_date: e.date, client: e.client.trim(), hours: Number(e.hours),
+      notes: e.notes.trim(), person: this.s.person || "",
+      updated_at: new Date().toISOString(), deleted: false
+    };
+    this.s.entries.push(row); this.save(); Cloud.push([row]); return row;
+  },
+  remove(id){
+    const r = this.s.entries.find(x => x.id === id);
+    if(!r) return;
+    r.deleted = true; r.updated_at = new Date().toISOString();
+    this.save(); Cloud.push([r]);
+  },
+  clients(){
+    const seen = new Map();
+    this.live().forEach(e => seen.set(e.client.toLowerCase(), e.client));
+    return [...seen.values()].sort((a,b)=>a.localeCompare(b));
+  },
+  merge(rows){
+    let changed = 0;
+    const byId = new Map(this.s.entries.map(e => [e.id, e]));
+    rows.forEach(r => {
+      const cur = byId.get(r.id);
+      if(!cur){ this.s.entries.push(r); byId.set(r.id, r); changed++; }
+      else if((r.updated_at||"") > (cur.updated_at||"")){ Object.assign(cur, r); changed++; }
+    });
+    if(changed) this.save();
+    return changed;
+  }
+};
+
+/* =========================================================
+   CLOUD — plain REST against a shared Postgres table
+   ========================================================= */
+const Cloud = {
+  state: "off",           // off | ok | err
+  base(){ return DB.s.url.replace(/\/+$/,"") + "/rest/v1/entries"; },
+  head(extra){
+    return Object.assign({
+      "apikey": DB.s.key,
+      "Authorization": "Bearer " + DB.s.key,
+      "Content-Type": "application/json"
+    }, extra||{});
+  },
+  setState(s, msg){
+    this.state = s;
+    const d = document.getElementById("syncDot"), t = document.getElementById("syncTxt");
+    if(!d) return;
+    d.className = "syncdot" + (s==="ok" ? " live" : s==="err" ? " err" : "");
+    t.textContent = msg || (s==="ok" ? "Synced" : s==="err" ? "Sync error" : "Local only");
+  },
+  async pull(){
+    if(!DB.linked()) { this.setState("off"); return 0; }
+    try{
+      const r = await fetch(this.base()+"?select=*", { headers: this.head() });
+      if(!r.ok) throw new Error(await r.text());
+      const rows = await r.json();
+      const n = DB.merge(rows.map(x => ({
+        id:x.id, work_date:x.work_date, client:x.client, hours:Number(x.hours),
+        notes:x.notes||"", person:x.person||"", updated_at:x.updated_at||"", deleted:!!x.deleted
+      })));
+      this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
+      return n;
+    }catch(err){ this.setState("err", "Sync error"); console.warn("pull", err); return 0; }
+  },
+  async push(rows){
+    if(!DB.linked() || !rows.length) return;
+    try{
+      const r = await fetch(this.base(), {
+        method:"POST",
+        headers: this.head({ "Prefer":"resolution=merge-duplicates,return=minimal" }),
+        body: JSON.stringify(rows)
+      });
+      if(!r.ok) throw new Error(await r.text());
+      this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
+    }catch(err){ this.setState("err","Sync error"); console.warn("push", err); }
+  },
+  async pushAll(){ await this.push(DB.s.entries); },
+  async test(url, key){
+    const r = await fetch(url.replace(/\/+$/,"")+"/rest/v1/entries?select=id&limit=1", {
+      headers:{ apikey:key, Authorization:"Bearer "+key }
+    });
+    if(!r.ok) throw new Error((await r.text()) || ("HTTP "+r.status));
+    return true;
+  }
+};
+
+/* =========================================================
+   DATES
+   ========================================================= */
+const D = {
+  today(){ const d=new Date(); return D.iso(d); },
+  iso(d){ return [d.getFullYear(), String(d.getMonth()+1).padStart(2,"0"), String(d.getDate()).padStart(2,"0")].join("-"); },
+  parse(s){ const [y,m,d]=s.split("-").map(Number); return new Date(y, m-1, d); },
+  weekStart(date, startsOn){
+    const d = new Date(date); const diff = (d.getDay() - startsOn + 7) % 7;
+    d.setDate(d.getDate() - diff); d.setHours(0,0,0,0); return d;
+  },
+  addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; },
+  short(d){ return d.toLocaleDateString(undefined,{month:"short",day:"numeric"}); },
+  dayLbl(s){ const d=D.parse(s); return d.toLocaleDateString(undefined,{weekday:"short",month:"numeric",day:"numeric"}); },
+  full(s){ return D.parse(s).toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric",year:"numeric"}); }
+};
+
+const hFmt = n => (Math.round(n*100)/100).toString().replace(/\.00$/,"").replace(/(\.\d)0$/,"$1");
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+/* =========================================================
+   UI
+   ========================================================= */
+const UI = {
+  view: "log",
+  weekOffset: 0,
+  draftHours: "",
+
+  boot(){
+    DB.load();
+    document.querySelectorAll("#nav button, #mobnav button").forEach(b => {
+      b.addEventListener("click", () => this.go(b.dataset.v));
+    });
+    this.paintWho();
+    this.go(DB.s.person ? "log" : "set");
+    if(DB.linked()){ Cloud.pull().then(()=>this.render()); setInterval(()=>Cloud.pull().then(()=>{ if(this.view!=="log") this.render(); }), 60000); }
+    window.addEventListener("focus", () => { if(DB.linked()) Cloud.pull().then(()=>{ if(this.view!=="log") this.render(); }); });
+  },
+
+  go(v){
+    this.view = v;
+    document.querySelectorAll("#nav button, #mobnav button").forEach(b => b.classList.toggle("on", b.dataset.v===v));
+    this.render();
+    window.scrollTo(0,0);
+  },
+
+  paintWho(){
+    const n = DB.s.person || "";
+    document.getElementById("whoName").textContent = n || "Set your name";
+    document.getElementById("avatar").textContent = n ? n.trim()[0].toUpperCase() : "?";
+    Cloud.setState(DB.linked() ? (Cloud.state==="err"?"err":"ok") : "off", DB.linked()? undefined : "Local only");
+  },
+
+  head(t, s, act){
+    document.getElementById("ttl").textContent = t;
+    document.getElementById("sub").textContent = s;
+    document.getElementById("topAct").innerHTML = act || "";
+  },
+
+  toast(m){
+    const t = document.getElementById("toast");
+    t.textContent = m; t.classList.add("show");
+    clearTimeout(this._tt); this._tt = setTimeout(()=>t.classList.remove("show"), 2200);
+  },
+
+  render(){
+    const v = document.getElementById("view");
+    if(this.view==="log")  { this.head("New Entry","Log where you were and what you did."); v.innerHTML = this.vLog(); this.wireLog(); }
+    if(this.view==="week") { this.vWeek(v); }
+    if(this.view==="find") { this.head("History","Every job, searchable."); v.innerHTML = this.vFind(); this.wireFind(); }
+    if(this.view==="set")  { this.head("Settings","Your name, and shared access for the crew."); v.innerHTML = this.vSet(); this.wireSet(); }
+  },
+
+  /* ---------- NEW ENTRY ---------- */
+  vLog(){
+    const cl = DB.clients();
+    const recent = DB.live().slice().sort((a,b)=> (b.updated_at||"").localeCompare(a.updated_at||"")).slice(0,5);
+    return `
+    <div class="row" style="align-items:flex-start">
+      <div class="col" style="flex:2;min-width:320px">
+        <div class="panel">
+          <div class="panel-h"><h2>Job Details</h2><span class="hint" style="margin:0">${esc(D.full(D.today()))}</span></div>
+          <div class="panel-b">
+            <form id="f">
+              <div class="grid2 mb">
+                <div>
+                  <label class="f" for="i-client">Client / Location</label>
+                  <input class="inp" id="i-client" list="cl" autocomplete="off" placeholder="Who did you work for?" required>
+                  <datalist id="cl">${cl.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>
+                </div>
+                <div>
+                  <label class="f" for="i-date">Date</label>
+                  <input class="inp" id="i-date" type="date" value="${D.today()}" required>
+                </div>
+              </div>
+
+              <div class="mb">
+                <label class="f" for="i-hours">Hours On Site</label>
+                <input class="inp" id="i-hours" type="number" step="0.25" min="0.25" placeholder="e.g. 2.5" required style="max-width:200px">
+                <div class="chips" id="hchips">
+                  ${[0.5,1,1.5,2,3,4,6,8].map(h=>`<button type="button" class="chip" data-h="${h}">${h}h</button>`).join("")}
+                </div>
+              </div>
+
+              <div class="mb">
+                <label class="f" for="i-notes">What did you do?</label>
+                <textarea class="inp" id="i-notes" placeholder="Replaced failed switch in server closet, re-terminated two drops, verified all 12 workstations back online. Recommended UPS replacement next visit." required></textarea>
+                <div class="hint">Write it like you'd explain it to a client six months from now.</div>
+              </div>
+
+              <button class="btn accent" type="submit" style="width:100%;justify-content:center;padding:11px">Save Entry</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="col" style="flex:1;min-width:260px">
+        <div class="panel">
+          <div class="panel-h"><h2>Recently Logged</h2></div>
+          ${recent.length ? recent.map(e=>`
+            <div style="padding:12px 18px;border-bottom:1px solid var(--line-2)">
+              <div style="display:flex;justify-content:space-between;gap:10px">
+                <b style="font-size:13.5px;font-weight:640">${esc(e.client)}</b>
+                <span class="tnum" style="font-size:13px;font-weight:660">${hFmt(e.hours)}h</span>
+              </div>
+              <div style="font-size:12px;color:var(--ink-3);margin-top:2px">${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}</div>
+            </div>`).join("")
+          : `<div class="empty"><b>Nothing yet</b>Your first entry shows up here.</div>`}
+        </div>
+      </div>
+    </div>`;
+  },
+
+  wireLog(){
+    const hours = document.getElementById("i-hours");
+    document.querySelectorAll("#hchips .chip").forEach(c => c.addEventListener("click", ()=>{
+      hours.value = c.dataset.h;
+      document.querySelectorAll("#hchips .chip").forEach(x=>x.classList.toggle("on", x===c));
+    }));
+    hours.addEventListener("input", ()=> document.querySelectorAll("#hchips .chip").forEach(x=>x.classList.toggle("on", x.dataset.h===hours.value)));
+
+    document.getElementById("f").addEventListener("submit", ev => {
+      ev.preventDefault();
+      const client = document.getElementById("i-client").value.trim();
+      const date   = document.getElementById("i-date").value;
+      const h      = parseFloat(document.getElementById("i-hours").value);
+      const notes  = document.getElementById("i-notes").value.trim();
+      if(!client || !date || !h || !notes) return;
+      DB.add({ client, date, hours:h, notes });
+      this.toast("Saved — " + client + " · " + hFmt(h) + "h");
+      this.render();
+      document.getElementById("i-client").focus();
+    });
+    document.getElementById("i-client").focus();
+  },
+
+  /* ---------- WEEK REPORT ---------- */
+  weekRange(){
+    const base = D.addDays(new Date(), this.weekOffset*7);
+    const a = D.weekStart(base, DB.s.weekStart);
+    const b = D.addDays(a, 6);
+    return [a,b];
+  },
+
+  weekData(){
+    const [a,b] = this.weekRange();
+    const A = D.iso(a), B = D.iso(b);
+    const rows = DB.live().filter(e => e.work_date >= A && e.work_date <= B);
+    const map = new Map();
+    rows.forEach(e => {
+      const k = e.client.toLowerCase();
+      if(!map.has(k)) map.set(k, { name:e.client, hours:0, list:[] });
+      const g = map.get(k); g.hours += Number(e.hours); g.list.push(e);
+    });
+    const groups = [...map.values()].sort((x,y)=> y.hours - x.hours);
+    groups.forEach(g => g.list.sort((x,y)=> x.work_date.localeCompare(y.work_date)));
+    const total = rows.reduce((s,e)=> s + Number(e.hours), 0);
+    const days  = new Set(rows.map(e=>e.work_date)).size;
+    return { a, b, rows, groups, total, days };
+  },
+
+  vWeek(v){
+    const w = this.weekData();
+    const label = this.weekOffset===0 ? "This week" : this.weekOffset===-1 ? "Last week" : D.short(w.a)+" – "+D.short(w.b);
+    this.head("Week Report", D.short(w.a)+" – "+D.short(w.b)+" · "+(w.rows.length)+" entr"+(w.rows.length===1?"y":"ies"),
+      `<div class="weekbar noprint">
+         <button class="btn sm" id="wPrev">←</button>
+         <span class="rng">${esc(label)}</span>
+         <button class="btn sm" id="wNext" ${this.weekOffset>=0?"disabled":""}>→</button>
+         <button class="btn sm" id="wToday">Today</button>
+         <button class="btn sm dark" id="wCopy">Copy Summary</button>
+         <button class="btn sm" id="wPrint">Print</button>
+       </div>`);
+
+    const max = w.groups.length ? w.groups[0].hours : 1;
+    v.innerHTML = `
+      <div class="stats">
+        <div class="stat"><div class="k">Total Hours</div><div class="v tnum">${hFmt(w.total)}<small> h</small></div></div>
+        <div class="stat"><div class="k">Clients</div><div class="v tnum">${w.groups.length}</div></div>
+        <div class="stat"><div class="k">Days Worked</div><div class="v tnum">${w.days}</div></div>
+        <div class="stat"><div class="k">Avg / Day</div><div class="v tnum">${w.days? hFmt(w.total/w.days):"0"}<small> h</small></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h2>By Client</h2><span class="hint" style="margin:0">Click a client to expand</span></div>
+        ${w.groups.length ? w.groups.map((g,i)=>`
+          <div class="grp${i===0?" open":""}">
+            <button class="grp-h">
+              <i class="car">▶</i>
+              <span class="nm">${esc(g.name)}</span>
+              <span class="ct">${g.list.length} visit${g.list.length>1?"s":""}</span>
+              <span class="bar"><i style="width:${Math.max(6,(g.hours/max)*100)}%"></i></span>
+              <span class="hr tnum">${hFmt(g.hours)}h</span>
+            </button>
+            <div class="grp-b">
+              ${g.list.map(e=>`
+                <div class="ent">
+                  <div class="d">${esc(D.dayLbl(e.work_date))}</div>
+                  <div class="n">${esc(e.notes)}${e.person?`<span style="color:var(--ink-3);font-size:12px"> — ${esc(e.person)}</span>`:""}</div>
+                  <div class="h tnum">${hFmt(e.hours)}h</div>
+                  <button class="x noprint" data-del="${e.id}" title="Delete">✕</button>
+                </div>`).join("")}
+            </div>
+          </div>`).join("")
+        : `<div class="empty"><b>No work logged this week</b>Entries you save will group here by client.</div>`}
+      </div>`;
+
+    document.getElementById("wPrev").onclick = ()=>{ this.weekOffset--; this.render(); };
+    document.getElementById("wNext").onclick = ()=>{ if(this.weekOffset<0){ this.weekOffset++; this.render(); } };
+    document.getElementById("wToday").onclick= ()=>{ this.weekOffset=0; this.render(); };
+    document.getElementById("wPrint").onclick= ()=> window.print();
+    document.getElementById("wCopy").onclick = ()=> this.copyReport();
+    v.querySelectorAll(".grp-h").forEach(b => b.onclick = ()=> b.parentElement.classList.toggle("open"));
+    v.querySelectorAll("[data-del]").forEach(b => b.onclick = e => {
+      e.stopPropagation();
+      if(confirm("Delete this entry?")){ DB.remove(b.dataset.del); this.render(); this.toast("Entry deleted"); }
+    });
+  },
+
+  reportText(){
+    const w = this.weekData();
+    const L = [];
+    L.push("TN INFO TECH — WEEK OF " + D.short(w.a).toUpperCase() + " – " + D.short(w.b).toUpperCase());
+    L.push(hFmt(w.total) + " hours · " + w.groups.length + " clients · " + w.days + " days");
+    L.push("");
+    w.groups.forEach(g => {
+      L.push(g.name.toUpperCase() + " — " + hFmt(g.hours) + "h");
+      g.list.forEach(e => {
+        L.push("  " + D.dayLbl(e.work_date) + " (" + hFmt(e.hours) + "h) " + e.notes.replace(/\s*\n\s*/g," "));
+      });
+      L.push("");
+    });
+    return L.join("\n").trim();
+  },
+
+  async copyReport(){
+    const t = this.reportText();
+    try{ await navigator.clipboard.writeText(t); this.toast("Summary copied — paste it anywhere"); }
+    catch(e){
+      this.modal("Week Summary", `<div class="rep">${esc(t)}</div>`, `<button class="btn" onclick="UI.closeModal()">Done</button>`);
+    }
+  },
+
+  /* ---------- HISTORY ---------- */
+  vFind(){
+    const cl = DB.clients();
+    return `
+      <div class="panel mb">
+        <div class="panel-b">
+          <div class="row">
+            <div class="col" style="flex:2"><label class="f" for="q">Search</label>
+              <input class="inp" id="q" placeholder="Client, or anything in the notes…" autocomplete="off"></div>
+            <div class="col"><label class="f" for="qc">Client</label>
+              <select class="inp" id="qc"><option value="">All clients</option>${cl.map(c=>`<option>${esc(c)}</option>`).join("")}</select></div>
+            <div class="col"><label class="f" for="qs">Sort</label>
+              <select class="inp" id="qs"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="hrs">Most hours</option></select></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel"><div class="panel-h"><h2 id="rc">All Entries</h2>
+        <button class="btn sm" id="csv">Export CSV</button></div>
+        <div id="rl"></div>
+      </div>`;
+  },
+
+  wireFind(){
+    const q=document.getElementById("q"), qc=document.getElementById("qc"), qs=document.getElementById("qs");
+    const run = ()=>{
+      const term=q.value.trim().toLowerCase(), cli=qc.value, sort=qs.value;
+      let rows = DB.live();
+      if(cli) rows = rows.filter(e=>e.client===cli);
+      if(term) rows = rows.filter(e=> (e.client+" "+e.notes+" "+(e.person||"")).toLowerCase().includes(term));
+      rows.sort((a,b)=> sort==="hrs" ? b.hours-a.hours : sort==="old" ? a.work_date.localeCompare(b.work_date) : b.work_date.localeCompare(a.work_date));
+
+      const hl = s => { const t=esc(s); if(!term) return t;
+        return t.replace(new RegExp("("+term.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","ig"), "<mark>$1</mark>"); };
+
+      const total = rows.reduce((s,e)=>s+Number(e.hours),0);
+      document.getElementById("rc").textContent = rows.length + " entr" + (rows.length===1?"y":"ies") + " · " + hFmt(total) + "h";
+      document.getElementById("rl").innerHTML = rows.length ? rows.map(e=>`
+        <div class="res">
+          <div class="meta"><b>${hl(e.client)}</b><span>${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}</span></div>
+          <div class="txt">${hl(e.notes)}</div>
+          <div class="hh tnum">${hFmt(e.hours)}h</div>
+          <button class="btn ghost sm" data-del="${e.id}">✕</button>
+        </div>`).join("")
+        : `<div class="empty"><b>Nothing found</b>${term?`No entries match “${esc(term)}”.`:"Log your first job to build history."}</div>`;
+
+      document.querySelectorAll("#rl [data-del]").forEach(b => b.onclick = ()=>{
+        if(confirm("Delete this entry?")){ DB.remove(b.dataset.del); run(); this.toast("Entry deleted"); }
+      });
+    };
+    q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run);
+    document.getElementById("csv").onclick = ()=>{
+      const rows = DB.live().slice().sort((a,b)=>a.work_date.localeCompare(b.work_date));
+      const csv = ["Date,Client,Hours,Logged By,Notes"].concat(rows.map(e =>
+        [e.work_date, e.client, e.hours, e.person||"", e.notes].map(x=>`"${String(x).replace(/"/g,'""')}"`).join(",")
+      )).join("\n");
+      const a=document.createElement("a");
+      a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+      a.download="tn-info-tech-joblog-"+D.today()+".csv"; a.click();
+      this.toast("CSV downloaded");
+    };
+    run();
+  },
+
+  /* ---------- SETTINGS ---------- */
+  vSet(){
+    const s = DB.s;
+    return `
+      <div class="panel mb">
+        <div class="panel-h"><h2>Who Are You?</h2></div>
+        <div class="panel-b">
+          <div class="row">
+            <div class="col" style="max-width:280px">
+              <label class="f" for="s-name">Your name</label>
+              <input class="inp" id="s-name" value="${esc(s.person)}" placeholder="Trace">
+              <div class="hint">Stamped on every entry so you both know who did what.</div>
+            </div>
+            <div class="col" style="max-width:220px">
+              <label class="f" for="s-ws">Week starts on</label>
+              <select class="inp" id="s-ws">
+                <option value="1"${s.weekStart===1?" selected":""}>Monday</option>
+                <option value="0"${s.weekStart===0?" selected":""}>Sunday</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn dark mt" id="s-save">Save</button>
+        </div>
+      </div>
+
+      <div class="panel mb">
+        <div class="panel-h">
+          <h2>Shared Access ${DB.linked()?'<span style="color:var(--good);font-weight:600;font-size:12px"> · Connected</span>':''}</h2>
+          <button class="btn sm" id="s-how">Setup guide</button>
+        </div>
+        <div class="panel-b">
+          <p style="font-size:14px;color:var(--ink-2);margin-bottom:14px;max-width:640px">
+            Paste two values from a free Supabase project and every entry syncs to one shared table — you log a job on your phone, your dad sees it on his laptop. Leave blank and everything stays on this device.
+          </p>
+          <div class="grid2">
+            <div>
+              <label class="f" for="s-url">Project URL</label>
+              <input class="inp" id="s-url" value="${esc(s.url)}" placeholder="https://abcdefg.supabase.co" autocomplete="off">
+            </div>
+            <div>
+              <label class="f" for="s-key">Anon public key</label>
+              <input class="inp" id="s-key" value="${esc(s.key)}" placeholder="eyJhbGciOi…" autocomplete="off">
+            </div>
+          </div>
+          <div class="mt" style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn accent" id="s-connect">Connect &amp; Sync</button>
+            ${DB.linked()?'<button class="btn" id="s-invite">Copy Invite Link for Dad</button>':''}
+            ${DB.linked()?'<button class="btn ghost" id="s-off">Disconnect</button>':''}
+          </div>
+          <div class="hint" id="s-msg"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-h"><h2>Your Data</h2></div>
+        <div class="panel-b">
+          <div style="font-size:14px;color:var(--ink-2);margin-bottom:12px">
+            <b class="tnum">${DB.live().length}</b> entries · <b class="tnum">${hFmt(DB.live().reduce((a,e)=>a+Number(e.hours),0))}</b> hours logged all-time
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" id="s-export">Download Backup</button>
+            <button class="btn" id="s-import">Restore Backup</button>
+            <input type="file" id="s-file" accept="application/json" hidden>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  wireSet(){
+    document.getElementById("s-save").onclick = ()=>{
+      DB.s.person = document.getElementById("s-name").value.trim();
+      DB.s.weekStart = Number(document.getElementById("s-ws").value);
+      DB.save(); this.paintWho(); this.toast("Saved");
+    };
+
+    document.getElementById("s-how").onclick = ()=> this.guide();
+
+    document.getElementById("s-connect").onclick = async ()=>{
+      const url = document.getElementById("s-url").value.trim();
+      const key = document.getElementById("s-key").value.trim();
+      const msg = document.getElementById("s-msg");
+      if(!url || !key){ msg.textContent = "Both fields are required."; return; }
+      msg.textContent = "Testing connection…";
+      try{
+        await Cloud.test(url, key);
+        DB.s.url = url; DB.s.key = key; DB.save();
+        await Cloud.pull(); await Cloud.pushAll();
+        this.paintWho(); this.toast("Connected — data is now shared");
+        this.render();
+      }catch(err){
+        msg.innerHTML = `<span style="color:#c0392b">Couldn't connect. Check the URL/key, and make sure the <b>entries</b> table exists (see Setup guide).</span>`;
+      }
+    };
+
+    const inv = document.getElementById("s-invite");
+    if(inv) inv.onclick = async ()=>{
+      const cfg = btoa(JSON.stringify({u:DB.s.url,k:DB.s.key}));
+      const link = location.origin + location.pathname + "#join=" + cfg;
+      try{ await navigator.clipboard.writeText(link); this.toast("Invite link copied — send it to your dad"); }
+      catch(e){ prompt("Send this link to your dad:", link); }
+    };
+
+    const off = document.getElementById("s-off");
+    if(off) off.onclick = ()=>{
+      if(!confirm("Disconnect from the shared table? Local entries stay on this device.")) return;
+      DB.s.url=""; DB.s.key=""; DB.save(); Cloud.setState("off","Local only"); this.render(); this.toast("Disconnected");
+    };
+
+    document.getElementById("s-export").onclick = ()=>{
+      const a=document.createElement("a");
+      a.href=URL.createObjectURL(new Blob([JSON.stringify(DB.s.entries,null,2)],{type:"application/json"}));
+      a.download="tn-joblog-backup-"+D.today()+".json"; a.click(); this.toast("Backup downloaded");
+    };
+    const file = document.getElementById("s-file");
+    document.getElementById("s-import").onclick = ()=> file.click();
+    file.onchange = ()=>{
+      const f=file.files[0]; if(!f) return;
+      const r=new FileReader();
+      r.onload = ()=>{
+        try{
+          const rows=JSON.parse(r.result);
+          const n=DB.merge(rows); Cloud.push(rows);
+          this.toast(n+" entries restored"); this.render();
+        }catch(e){ alert("That file isn't a valid backup."); }
+      };
+      r.readAsText(f);
+    };
+  },
+
+  guide(){
+    const sql =
+`create table if not exists entries (
+  id          uuid primary key,
+  work_date   date        not null,
+  client      text        not null,
+  hours       numeric     not null,
+  notes       text        default '',
+  person      text        default '',
+  updated_at  timestamptz default now(),
+  deleted     boolean     default false
+);
+
+alter table entries enable row level security;
+
+create policy "crew access" on entries
+  for all using (true) with check (true);`;
+
+    this.modal("Connect the crew — 3 minutes",
+      `<ol class="steps">
+         <li>Go to <b>supabase.com</b> → sign up (free) → <b>New project</b>. Any name, any database password. Wait ~1 minute for it to spin up.</li>
+         <li>Open <b>SQL Editor</b> in the left sidebar → <b>New query</b> → paste this → <b>Run</b>:</li>
+       </ol>
+       <pre class="sql" id="sqlBox">${esc(sql)}</pre>
+       <ol class="steps" start="3" style="margin-top:12px">
+         <li>Go to <b>Project Settings → API</b>. Copy the <b>Project URL</b> and the <b>anon public</b> key.</li>
+         <li>Paste both here in Settings → <b>Connect &amp; Sync</b>.</li>
+         <li>Hit <b>Copy Invite Link for Dad</b> and text it to him. He opens the link, types his name, and he's in — same data, no signup.</li>
+       </ol>
+       <p class="hint">Anyone with that link can read and write the log, so treat it like a key to the shop.</p>`,
+      `<button class="btn" id="cpSql">Copy SQL</button><button class="btn dark" onclick="UI.closeModal()">Got it</button>`);
+
+    document.getElementById("cpSql").onclick = async ()=>{
+      try{ await navigator.clipboard.writeText(sql); this.toast("SQL copied"); }catch(e){}
+    };
+  },
+
+  modal(title, body, foot){
+    document.getElementById("mTitle").textContent = title;
+    document.getElementById("mBody").innerHTML = body;
+    document.getElementById("mFoot").innerHTML = foot || "";
+    document.getElementById("mask").classList.add("show");
+  },
+  closeModal(){ document.getElementById("mask").classList.remove("show"); }
+};
+
+document.getElementById("mask").addEventListener("click", e => { if(e.target.id==="mask") UI.closeModal(); });
+
+/* invite link handoff */
+(function(){
+  const m = location.hash.match(/join=([^&]+)/);
+  if(!m) return;
+  try{
+    const cfg = JSON.parse(atob(decodeURIComponent(m[1])));
+    if(cfg.u && cfg.k){
+      DB.load(); DB.s.url = cfg.u; DB.s.key = cfg.k; DB.save();
+      history.replaceState(null,"",location.pathname);
+    }
+  }catch(e){}
+})();
+
+UI.boot();
+</script>
+</body>
+</html>
