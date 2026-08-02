@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02f">
+<meta name="build" content="2026-08-02g">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -1170,6 +1170,44 @@ const UI = {
                 <div class="hint">Write it like you'd explain it to a client six months from now.</div>
               </div>
 
+              <div class="mb" style="border:1px solid var(--line);border-radius:8px;overflow:hidden">
+                <label style="display:flex;align-items:center;gap:10px;padding:13px 15px;cursor:pointer;background:#fafbfc">
+                  <input type="checkbox" id="i-recur" style="width:16px;height:16px">
+                  <span style="font-weight:640;font-size:14px">Set this up as recurring</span>
+                  <span style="font-size:12.5px;color:var(--ink-3)">— also add it to the Recurring tracker</span>
+                </label>
+
+                <div id="recurPane" style="display:none;padding:16px 15px;border-top:1px solid var(--line-2)">
+                  <div class="mb">
+                    <label class="f" for="r-item">What renews</label>
+                    <input class="inp" id="r-item" list="ritems" placeholder="Microsoft 365 Business Standard" autocomplete="off">
+                    <datalist id="ritems">
+                      <option value="Microsoft 365 Business Basic"><option value="Microsoft 365 Business Standard">
+                      <option value="Microsoft 365 Business Premium"><option value="Exchange Online Plan 1">
+                      <option value="Backup"><option value="Antivirus / EDR"><option value="Remote Monitoring">
+                      <option value="Website Hosting"><option value="Domain Renewal"><option value="Managed Services">
+                    </datalist>
+                  </div>
+                  <div class="grid2 mb">
+                    <div><label class="f" for="r-qty">Seats / Quantity</label>
+                      <input class="inp tnum" id="r-qty" type="number" step="1" min="0" value="1"></div>
+                    <div><label class="f" for="r-price">Price each</label>
+                      <input class="inp tnum" id="r-price" type="number" step="0.01" min="0" placeholder="0.00"></div>
+                  </div>
+                  <div class="grid2 mb">
+                    <div><label class="f" for="r-cycle">Billed every</label>
+                      <select class="inp" id="r-cycle">
+                        <option value="monthly">Monthly</option>
+                        <option value="quarterly">Quarterly</option>
+                        <option value="annual">Annual</option>
+                      </select></div>
+                    <div><label class="f" for="r-due">Next due</label>
+                      <input class="inp" id="r-due" type="date"></div>
+                  </div>
+                  <div class="calc" id="r-calc" style="min-width:0"></div>
+                </div>
+              </div>
+
               <button class="btn accent" type="submit" style="width:100%;justify-content:center;padding:11px">Save Entry</button>
             </form>
           </div>
@@ -1282,6 +1320,44 @@ const UI = {
     me.addEventListener("input", paintMiles);
     paintMiles();
 
+    /* recurring add-on */
+    const recur = document.getElementById("i-recur");
+    const pane  = document.getElementById("recurPane");
+    const rDue  = document.getElementById("r-due");
+    const rCalc = document.getElementById("r-calc");
+
+    const paintRecur = () => {
+      const qty = Number(document.getElementById("r-qty").value||0);
+      const pr  = Number(document.getElementById("r-price").value||0);
+      const cy  = document.getElementById("r-cycle").value;
+      const amt = qty * pr, mo = amt / SUB.cycles[cy];
+      rCalc.className = "calc" + (amt ? " live" : "");
+      rCalc.innerHTML = amt
+        ? `<b class="tnum">${$m(amt)}</b><span>every ${SUB.label[cy].toLowerCase().replace("ly","")} · ${$m(mo)}/mo · ${$m(mo*12)}/yr</span>`
+        : `<b>—</b><span>Enter quantity and price</span>`;
+    };
+    ["r-qty","r-price","r-cycle"].forEach(i => document.getElementById(i).addEventListener("input", paintRecur));
+    document.getElementById("r-cycle").addEventListener("change", paintRecur);
+    paintRecur();
+
+    recur.addEventListener("change", ()=>{
+      pane.style.display = recur.checked ? "" : "none";
+      if(recur.checked){
+        /* default the first renewal one cycle out from the work date */
+        if(!rDue.value){
+          const base = document.getElementById("i-date").value || D.today();
+          rDue.value = SUB.advance(base, document.getElementById("r-cycle").value);
+        }
+        document.getElementById("r-item").focus();
+      }
+    });
+    document.getElementById("r-cycle").addEventListener("change", ()=>{
+      if(recur.checked){
+        const base = document.getElementById("i-date").value || D.today();
+        rDue.value = SUB.advance(base, document.getElementById("r-cycle").value);
+      }
+    });
+
     /* hours chips */
     document.querySelectorAll("#hchips .chip").forEach(c => c.addEventListener("click", ()=>{
       hours.value = c.dataset.h;
@@ -1313,11 +1389,35 @@ const UI = {
       if(mStart !== "" && mEnd !== "" && mEnd < mStart){ this.toast("End odometer is lower than start"); me.focus(); return; }
       const drove = (mStart !== "" && mEnd !== "") ? mEnd - mStart : 0;
 
+      /* validate the recurring half before saving anything */
+      let sub = null;
+      if(recur.checked){
+        const item = document.getElementById("r-item").value.trim();
+        const price = Number(document.getElementById("r-price").value||0);
+        if(!item){ this.toast("What renews? Name the subscription"); document.getElementById("r-item").focus(); return; }
+        if(!price){ this.toast("Add a price for the subscription"); document.getElementById("r-price").focus(); return; }
+        sub = {
+          client, item,
+          qty: Number(document.getElementById("r-qty").value||1),
+          unit_price: price,
+          cycle: document.getElementById("r-cycle").value,
+          next_due: rDue.value || SUB.advance(date, document.getElementById("r-cycle").value),
+          last_billed: "", note: "", active: true
+        };
+      }
+
       DB.add({ client, date, hours:h, notes, start:s, end:e,
                address: addr.value, milesStart:mStart, milesEnd:mEnd,
                billed: document.getElementById("i-billed").value });
-      this.toast("Saved — " + client + " · " + hFmt(h) + "h" + (drove ? " · " + MI.fmt(drove) + " mi" : ""));
+
+      if(sub){
+        DB.saveSub(sub);
+        this.toast("Saved — " + client + " · " + hFmt(h) + "h · " + $m(SUB.amount(sub)) + SUB.per[sub.cycle] + " recurring");
+      } else {
+        this.toast("Saved — " + client + " · " + hFmt(h) + "h" + (drove ? " · " + MI.fmt(drove) + " mi" : ""));
+      }
       this.render();
+
       document.getElementById("i-client").focus();
     });
     document.querySelectorAll("[data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
