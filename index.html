@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-01e">
+<meta name="build" content="2026-08-01f">
 <title>TN Info Tech — Job Log</title>
 <style>
 :root{
@@ -375,6 +375,14 @@ const DB = {
     this.live().forEach(e => seen.set(e.client.toLowerCase(), e.client));
     return [...seen.values()].sort((a,b)=>a.localeCompare(b));
   },
+  /* everyone who has ever logged a job */
+  people(){
+    const set = new Map();
+    this.live().forEach(e => { const p=(e.person||"").trim(); if(p) set.set(p.toLowerCase(), p); });
+    if(this.s.person) set.set(this.s.person.toLowerCase(), this.s.person);
+    return [...set.values()].sort((a,b)=>a.localeCompare(b));
+  },
+
   /* ---- client records ---- */
   clientList(){
     return Object.values(this.s.clients)
@@ -588,6 +596,7 @@ const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<"
 const UI = {
   view: "log",
   weekOffset: 0,
+  who: "",          /* "" = everyone */
   draftHours: "",
 
   boot(){
@@ -883,7 +892,23 @@ const UI = {
   weekData(){
     const [a,b] = this.weekRange();
     const A = D.iso(a), B = D.iso(b);
-    const rows = DB.live().filter(e => e.work_date >= A && e.work_date <= B);
+    let rows = DB.live().filter(e => e.work_date >= A && e.work_date <= B);
+
+    /* everything below respects the Trace / Joe / Everyone filter */
+    const all = rows;
+    if(this.who) rows = rows.filter(e => (e.person||"").trim().toLowerCase() === this.who.toLowerCase());
+
+    /* per-person breakdown, always computed off the unfiltered week */
+    const pm = new Map();
+    all.forEach(e => {
+      const p = (e.person||"").trim() || "Unassigned";
+      if(!pm.has(p)) pm.set(p, { name:p, hours:0, miles:0, visits:0, days:new Set() });
+      const g = pm.get(p);
+      g.hours += Number(e.hours); g.miles += MI.of(e); g.visits++; g.days.add(e.work_date);
+    });
+    const byPerson = [...pm.values()].map(p => ({...p, days:p.days.size}))
+                       .sort((x,y)=> y.hours - x.hours);
+
     const map = new Map();
     rows.forEach(e => {
       const k = e.client.toLowerCase();
@@ -899,13 +924,15 @@ const UI = {
     const total = rows.reduce((s,e)=> s + Number(e.hours), 0);
     const miles = rows.reduce((s,e)=> s + MI.of(e), 0);
     const days  = new Set(rows.map(e=>e.work_date)).size;
-    return { a, b, rows, groups, total, miles, days };
+    return { a, b, rows, groups, total, miles, days, byPerson, allCount: all.length };
   },
 
   vWeek(v){
     const w = this.weekData();
     const label = this.weekOffset===0 ? "This week" : this.weekOffset===-1 ? "Last week" : D.short(w.a)+" – "+D.short(w.b);
-    this.head("Week Report", D.short(w.a)+" – "+D.short(w.b)+" · "+(w.rows.length)+" entr"+(w.rows.length===1?"y":"ies"),
+    const people = DB.people();
+    this.head(this.who ? this.who + "'s Week" : "Week Report",
+      D.short(w.a)+" – "+D.short(w.b)+" · "+(w.rows.length)+" entr"+(w.rows.length===1?"y":"ies"),
       `<div class="weekbar noprint">
          <button class="btn sm" id="wPrev">←</button>
          <span class="rng">${esc(label)}</span>
@@ -916,7 +943,31 @@ const UI = {
        </div>`);
 
     const max = w.groups.length ? w.groups[0].hours : 1;
+    const pmax = w.byPerson.length ? w.byPerson[0].hours : 1;
+
     v.innerHTML = `
+      ${people.length > 1 ? `
+      <div class="noprint" style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+        <span class="f" style="margin:0">Whose work</span>
+        <div class="seg" id="whoSeg">
+          <button data-w=""${this.who===""?" class='on'":""}>Everyone</button>
+          ${people.map(p=>`<button data-w="${esc(p)}"${this.who===p?" class='on'":""}>${esc(p)}</button>`).join("")}
+        </div>
+      </div>` : ""}
+
+      ${(!this.who && w.byPerson.length > 1) ? `
+      <div class="panel mb">
+        <div class="panel-h"><h2>Who Did What</h2><span class="hint" style="margin:0">${MI.fmt(w.byPerson.reduce((s,p)=>s+p.miles,0))} mi combined</span></div>
+        ${w.byPerson.map(p=>`
+          <div style="display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line-2)">
+            <span style="flex:1;font-weight:640;font-size:14.5px">${esc(p.name)}</span>
+            <span class="ct" style="font-size:12px;color:var(--ink-3)">${p.visits} job${p.visits===1?"":"s"} · ${p.days} day${p.days===1?"":"s"}${p.miles?` · ${MI.fmt(p.miles)} mi`:""}</span>
+            <span class="bar" style="flex:0 0 120px"><i style="width:${Math.max(6,(p.hours/pmax)*100)}%"></i></span>
+            <span class="tnum" style="font-weight:680;font-size:15px;min-width:64px;text-align:right">${hFmt(p.hours)}h</span>
+            <button class="btn sm noprint" data-w2="${esc(p.name)}">Only ${esc(p.name.split(" ")[0])}</button>
+          </div>`).join("")}
+      </div>` : ""}
+
       <div class="stats">
         <div class="stat"><div class="k">Total Hours</div><div class="v tnum">${hFmt(w.total)}<small> h</small></div></div>
         <div class="stat"><div class="k">Clients</div><div class="v tnum">${w.groups.length}</div></div>
@@ -927,6 +978,7 @@ const UI = {
       <div class="panel">
         <div class="panel-h"><h2>By Client</h2><span class="hint" style="margin:0">Click a client to expand</span></div>
         ${w.groups.length ? w.groups.map((g,i)=>`
+
           <div class="grp${i===0?" open":""}">
             <button class="grp-h">
               <i class="car">▶</i>
@@ -946,8 +998,11 @@ const UI = {
                 </div>`).join("")}
             </div>
           </div>`).join("")
-        : `<div class="empty"><b>No work logged this week</b>Entries you save will group here by client.</div>`}
+        : `<div class="empty"><b>${this.who ? esc(this.who)+" has nothing logged this week" : "No work logged this week"}</b>${this.who && w.allCount ? "Someone else logged "+w.allCount+" job"+(w.allCount===1?"":"s")+" — switch to Everyone." : "Entries you save will group here by client."}</div>`}
       </div>`;
+
+    v.querySelectorAll("#whoSeg button").forEach(b => b.onclick = ()=>{ this.who = b.dataset.w; this.render(); });
+    v.querySelectorAll("[data-w2]").forEach(b => b.onclick = ()=>{ this.who = b.dataset.w2; this.render(); });
 
     document.getElementById("wPrev").onclick = ()=>{ this.weekOffset--; this.render(); };
     document.getElementById("wNext").onclick = ()=>{ if(this.weekOffset<0){ this.weekOffset++; this.render(); } };
@@ -968,8 +1023,13 @@ const UI = {
     const w = this.weekData();
     const L = [];
     L.push("TN INFO TECH — WEEK OF " + D.short(w.a).toUpperCase() + " – " + D.short(w.b).toUpperCase());
+    L.push(this.who ? this.who.toUpperCase() + " ONLY" : "ALL CREW");
     L.push(hFmt(w.total) + " hours · " + w.groups.length + " clients · " + w.days + " days"
            + (w.miles ? " · " + MI.fmt(w.miles) + " miles" : ""));
+    if(!this.who && w.byPerson.length > 1){
+      L.push("");
+      w.byPerson.forEach(p => L.push("  " + p.name + ": " + hFmt(p.hours) + "h · " + p.visits + " jobs" + (p.miles ? " · " + MI.fmt(p.miles) + " mi" : "")));
+    }
     L.push("");
     w.groups.forEach(g => {
       L.push(g.name.toUpperCase() + " — " + hFmt(g.hours) + "h" + (g.miles ? " · " + MI.fmt(g.miles) + " mi" : ""));
@@ -977,7 +1037,8 @@ const UI = {
       g.list.forEach(e => {
         const rng = T.range(e.start_time, e.end_time);
         const mi  = MI.of(e) ? " [" + MI.fmt(MI.of(e)) + " mi]" : "";
-        L.push("  " + D.dayLbl(e.work_date) + (rng ? " " + rng : "") + " (" + hFmt(e.hours) + "h)" + mi + " " + e.notes.replace(/\s*\n\s*/g," "));
+        const wh  = (!this.who && e.person) ? " {" + e.person + "}" : "";
+        L.push("  " + D.dayLbl(e.work_date) + (rng ? " " + rng : "") + " (" + hFmt(e.hours) + "h)" + mi + wh + " " + e.notes.replace(/\s*\n\s*/g," "));
       });
       L.push("");
     });
@@ -1147,8 +1208,13 @@ const UI = {
            <input class="inp" id="x-date" type="date" value="${esc(e.work_date)}"></div>
        </div>
 
-       <div class="mb"><label class="f" for="x-addr">Address</label>
-         <input class="inp" id="x-addr" value="${esc(e.address||"")}" autocomplete="off" placeholder="Optional"></div>
+       <div class="grid2 mb">
+         <div><label class="f" for="x-addr">Address</label>
+           <input class="inp" id="x-addr" value="${esc(e.address||"")}" autocomplete="off" placeholder="Optional"></div>
+         <div><label class="f" for="x-person">Who did the work</label>
+           <input class="inp" id="x-person" list="xpp" value="${esc(e.person||"")}" autocomplete="off" placeholder="Trace">
+           <datalist id="xpp">${DB.people().map(p=>`<option value="${esc(p)}">`).join("")}</datalist></div>
+       </div>
 
        <div class="mb">
          <label class="f">Time</label>
@@ -1225,6 +1291,7 @@ const UI = {
       DB.update(id, {
         client, work_date:date, hours, notes,
         address: $("x-addr").value.trim(),
+        person: $("x-person").value.trim(),
         start_time: $("x-start").value, end_time: $("x-end").value,
         miles_start: ms, miles_end: me
       });
@@ -1271,6 +1338,8 @@ const UI = {
               <input class="inp" id="q" placeholder="Client, or anything in the notes…" autocomplete="off"></div>
             <div class="col"><label class="f" for="qc">Client</label>
               <select class="inp" id="qc"><option value="">All clients</option>${cl.map(c=>`<option>${esc(c)}</option>`).join("")}</select></div>
+            <div class="col"><label class="f" for="qp">Who</label>
+              <select class="inp" id="qp"><option value="">Everyone</option>${DB.people().map(p=>`<option>${esc(p)}</option>`).join("")}</select></div>
             <div class="col"><label class="f" for="qs">Sort</label>
               <select class="inp" id="qs"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="hrs">Most hours</option></select></div>
           </div>
@@ -1283,11 +1352,12 @@ const UI = {
   },
 
   wireFind(){
-    const q=document.getElementById("q"), qc=document.getElementById("qc"), qs=document.getElementById("qs");
+    const q=document.getElementById("q"), qc=document.getElementById("qc"), qs=document.getElementById("qs"), qp=document.getElementById("qp");
     const run = ()=>{
-      const term=q.value.trim().toLowerCase(), cli=qc.value, sort=qs.value;
+      const term=q.value.trim().toLowerCase(), cli=qc.value, sort=qs.value, per=qp.value;
       let rows = DB.live();
       if(cli) rows = rows.filter(e=>e.client===cli);
+      if(per) rows = rows.filter(e=>(e.person||"").trim().toLowerCase()===per.toLowerCase());
       if(term) rows = rows.filter(e=> (e.client+" "+e.notes+" "+(e.person||"")+" "+(e.address||"")).toLowerCase().includes(term));
       rows.sort((a,b)=> sort==="hrs" ? b.hours-a.hours : sort==="old" ? a.work_date.localeCompare(b.work_date) : b.work_date.localeCompare(a.work_date));
 
@@ -1308,7 +1378,7 @@ const UI = {
 
       document.querySelectorAll("#rl [data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
     };
-    q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run);
+    q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run); qp.addEventListener("change",run);
     document.getElementById("csv").onclick = ()=>{
       const rows = DB.live().slice().sort((a,b)=>a.work_date.localeCompare(b.work_date));
       const csv = ["Date,Client,Address,Start,End,Hours,Miles Start,Miles End,Miles Driven,Logged By,Notes"].concat(rows.map(e =>
