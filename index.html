@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02d">
+<meta name="build" content="2026-08-02e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -146,8 +146,22 @@ textarea.inp{resize:vertical;min-height:92px;line-height:1.5}
 .pill.partial {background:#fff7ed;border-color:#f0c3a1;color:#9a3a05}
 .pill.billed  {background:#ecfdf3;border-color:#a7e0c0;color:#137a4f}
 .pill i{width:6px;height:6px;border-radius:50%;background:currentColor;display:block}
-button.pill{cursor:pointer}
-button.pill:hover{filter:brightness(.96)}
+
+/* inline billing dropdown */
+.billsel{
+  appearance:none;-webkit-appearance:none;
+  padding:5px 24px 5px 10px;border-radius:999px;border:1px solid;
+  font-size:11.5px;font-weight:700;letter-spacing:.03em;cursor:pointer;
+  background-repeat:no-repeat;background-position:right 8px center;background-size:8px;
+}
+.billsel:focus{outline:none;box-shadow:0 0 0 3px rgba(21,23,27,.08)}
+.billsel.unbilled{background-color:#fff;border-color:#d9dde3;color:#4b5563;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%236b7280' stroke-width='1.6' fill='none' stroke-linecap='round'/></svg>")}
+.billsel.partial{background-color:#fff7ed;border-color:#f0c3a1;color:#9a3a05;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%239a3a05' stroke-width='1.6' fill='none' stroke-linecap='round'/></svg>")}
+.billsel.billed{background-color:#ecfdf3;border-color:#a7e0c0;color:#137a4f;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23137a4f' stroke-width='1.6' fill='none' stroke-linecap='round'/></svg>")}
+@media(max-width:860px){ .billsel{font-size:13px;padding:8px 26px 8px 12px} }
 .stat.warn .v{color:var(--accent)}
 .stat{background:var(--paper);padding:15px 18px}
 .stat .k{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650}
@@ -767,11 +781,30 @@ const BILL = {
   label: { unbilled:"Unbilled", partial:"Partial", billed:"Billed" },
   of(e){ return BILL.order.includes(e.billed) ? e.billed : "unbilled"; },
   next(s){ return BILL.order[(BILL.order.indexOf(s) + 1) % BILL.order.length]; },
-  pill(e, clickable){
+  pill(e){
     const s = BILL.of(e);
-    const tag = clickable ? "button" : "span";
-    const attr = clickable ? ` data-bill="${e.id}" title="Click to change"` : "";
-    return `<${tag} class="pill ${s}"${attr}><i></i>${BILL.label[s]}</${tag}>`;
+    return `<span class="pill ${s}"><i></i>${BILL.label[s]}</span>`;
+  },
+  /* the dropdown used on entry rows */
+  select(e){
+    const s = BILL.of(e);
+    return `<select class="billsel ${s} noprint" data-billsel="${e.id}" title="Billing status">
+      ${BILL.order.map(o=>`<option value="${o}"${o===s?" selected":""}>${BILL.label[o]}</option>`).join("")}
+    </select>`;
+  },
+  /* wire every dropdown on the page */
+  wire(root, after){
+    root.querySelectorAll("[data-billsel]").forEach(sel => {
+      sel.onclick = ev => ev.stopPropagation();
+      sel.onchange = ev => {
+        ev.stopPropagation();
+        const row = DB.s.entries.find(x => x.id === sel.dataset.billsel);
+        if(!row) return;
+        DB.update(row.id, { billed: sel.value });
+        UI.toast(row.client + " — " + BILL.label[sel.value]);
+        if(after) after();
+      };
+    });
   },
   /* hours that still need invoicing (partial counts as outstanding) */
   openHours(list){ return list.filter(e => BILL.of(e) !== "billed").reduce((s,e)=> s + Number(e.hours), 0); }
@@ -795,6 +828,7 @@ const UI = {
   view: "log",
   weekOffset: 0,
   who: "",          /* "" = everyone */
+  bill: "",         /* "" = any status, "open" = needs billing, "billed" = billed */
   draftHours: "",
 
   async boot(){
@@ -1202,6 +1236,11 @@ const UI = {
     const all = rows;
     if(this.who) rows = rows.filter(e => (e.person||"").trim().toLowerCase() === this.who.toLowerCase());
 
+    /* the outstanding total is always for the whole week, regardless of the billing view */
+    const billBase = rows;
+    if(this.bill === "open")   rows = rows.filter(e => BILL.of(e) !== "billed");
+    if(this.bill === "billed") rows = rows.filter(e => BILL.of(e) === "billed");
+
     /* per-person breakdown, always computed off the unfiltered week */
     const pm = new Map();
     all.forEach(e => {
@@ -1228,7 +1267,8 @@ const UI = {
     const total = rows.reduce((s,e)=> s + Number(e.hours), 0);
     const miles = rows.reduce((s,e)=> s + MI.of(e), 0);
     const days  = new Set(rows.map(e=>e.work_date)).size;
-    return { a, b, rows, groups, total, miles, days, byPerson, allCount: all.length };
+    return { a, b, rows, groups, total, miles, days, byPerson, allCount: all.length,
+             openAll: BILL.openHours(billBase) };
   },
 
   vWeek(v){
@@ -1250,14 +1290,24 @@ const UI = {
     const pmax = w.byPerson.length ? w.byPerson[0].hours : 1;
 
     v.innerHTML = `
-      ${people.length > 1 ? `
-      <div class="noprint" style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
-        <span class="f" style="margin:0">Whose work</span>
-        <div class="seg" id="whoSeg">
-          <button data-w=""${this.who===""?" class='on'":""}>Everyone</button>
-          ${people.map(p=>`<button data-w="${esc(p)}"${this.who===p?" class='on'":""}>${esc(p)}</button>`).join("")}
+      <div class="noprint" style="display:flex;align-items:center;gap:18px;margin-bottom:18px;flex-wrap:wrap">
+        ${people.length > 1 ? `
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="f" style="margin:0">Whose work</span>
+          <div class="seg" id="whoSeg">
+            <button data-w=""${this.who===""?" class='on'":""}>Everyone</button>
+            ${people.map(p=>`<button data-w="${esc(p)}"${this.who===p?" class='on'":""}>${esc(p)}</button>`).join("")}
+          </div>
+        </div>` : ""}
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="f" style="margin:0">Billing</span>
+          <div class="seg" id="billSeg">
+            <button data-b=""${this.bill===""?" class='on'":""}>All</button>
+            <button data-b="open"${this.bill==="open"?" class='on'":""}>Needs Billing</button>
+            <button data-b="billed"${this.bill==="billed"?" class='on'":""}>Billed</button>
+          </div>
         </div>
-      </div>` : ""}
+      </div>
 
       ${(!this.who && w.byPerson.length > 1) ? `
       <div class="panel mb">
@@ -1278,7 +1328,7 @@ const UI = {
         <div class="stat"><div class="k">Days Worked</div><div class="v tnum">${w.days}</div></div>
         <div class="stat"><div class="k">Avg / Day</div><div class="v tnum">${w.days? hFmt(w.total/w.days):"0"}<small> h</small></div></div>
         <div class="stat"><div class="k">Miles Driven</div><div class="v tnum">${MI.fmt(w.miles)}<small> mi</small></div></div>
-        <div class="stat${BILL.openHours(w.rows)?" warn":""}"><div class="k">Not Yet Billed</div><div class="v tnum">${hFmt(BILL.openHours(w.rows))}<small> h</small></div></div>
+        <div class="stat${w.openAll?" warn":""}"><div class="k">Not Yet Billed</div><div class="v tnum">${hFmt(w.openAll)}<small> h</small></div></div>
       </div>
       <div class="panel">
         <div class="panel-h"><h2>By Client</h2><span class="hint" style="margin:0">Click a client to expand</span></div>
@@ -1302,7 +1352,7 @@ const UI = {
                   <div class="d">${esc(D.dayLbl(e.work_date))}${T.range(e.start_time,e.end_time)?`<div class="times" style="font-weight:500;margin-top:2px">${esc(T.range(e.start_time,e.end_time))}</div>`:""}</div>
                   <div class="n">${esc(e.notes)}${e.person?`<span style="color:var(--ink-3);font-size:12px"> — ${esc(e.person)}</span>`:""}${MI.of(e)?`<div class="times" style="margin-top:3px">${MI.fmt(MI.of(e))} mi &nbsp;<span style="font-weight:400">(${MI.fmt(e.miles_start)} → ${MI.fmt(e.miles_end)})</span></div>`:""}</div>
                   <div class="h tnum">${hFmt(e.hours)}h</div>
-                  ${BILL.pill(e, true)}
+                  ${BILL.select(e)}
                   <button class="x noprint" data-edit="${e.id}" title="Edit">Edit</button>
                 </div>`).join("")}
             </div>
@@ -1322,16 +1372,9 @@ const UI = {
     v.querySelectorAll("[data-edit]").forEach(b => b.onclick = e => {
       e.stopPropagation(); this.editEntry(b.dataset.edit);
     });
-    /* click a pill to cycle Unbilled → Partial → Billed */
-    v.querySelectorAll("[data-bill]").forEach(b => b.onclick = e => {
-      e.stopPropagation();
-      const row = DB.s.entries.find(x => x.id === b.dataset.bill);
-      if(!row) return;
-      const next = BILL.next(BILL.of(row));
-      DB.update(row.id, { billed: next });
-      this.toast(row.client + " — " + BILL.label[next]);
-      this.render();
-    });
+    BILL.wire(v, ()=> this.render());
+    const bs = document.getElementById("billSeg");
+    if(bs) bs.querySelectorAll("button").forEach(b => b.onclick = ()=>{ this.bill = b.dataset.b; this.render(); });
     v.querySelectorAll("[data-billall]").forEach(b => b.onclick = e => {
       e.stopPropagation();
       const name = b.dataset.billall;
@@ -1461,7 +1504,7 @@ const UI = {
                 </div>
                 <div class="txt">${esc(e.notes)}</div>
                 <div class="hh tnum">${hFmt(e.hours)}h</div>
-                ${BILL.pill(e, false)}
+                ${BILL.select(e)}
                 <button class="btn ghost sm" data-edit="${e.id}">Edit</button>
               </div>`).join("")
             : `<div class="empty"><b>Nothing logged here yet</b>Jobs you save for ${esc(c.name)} will stack up here.</div>`}
@@ -1470,6 +1513,7 @@ const UI = {
       </div>`;
 
     v.querySelectorAll("[data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
+    BILL.wire(v, ()=> this.render());
     document.getElementById("cBack").onclick = ()=>{ this.openClient = null; this.render(); };
     document.getElementById("cEdit").onclick = ()=> this.editClient(c.name);
     document.getElementById("cLog").onclick  = ()=>{
@@ -1688,7 +1732,13 @@ const UI = {
                 <option value="billed">Billed</option>
               </select></div>
             <div class="col"><label class="f" for="qs">Sort</label>
-              <select class="inp" id="qs"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="hrs">Most hours</option></select></div>
+              <select class="inp" id="qs">
+                <option value="new">Newest first</option>
+                <option value="old">Oldest first</option>
+                <option value="hrs">Most hours</option>
+                <option value="bill">Unbilled first</option>
+                <option value="billrev">Billed first</option>
+              </select></div>
           </div>
         </div>
       </div>
@@ -1708,7 +1758,13 @@ const UI = {
       if(per) rows = rows.filter(e=>(e.person||"").trim().toLowerCase()===per.toLowerCase());
       if(bill) rows = rows.filter(e => bill==="open" ? BILL.of(e)!=="billed" : BILL.of(e)===bill);
       if(term) rows = rows.filter(e=> (e.client+" "+e.notes+" "+(e.person||"")+" "+(e.address||"")).toLowerCase().includes(term));
-      rows.sort((a,b)=> sort==="hrs" ? b.hours-a.hours : sort==="old" ? a.work_date.localeCompare(b.work_date) : b.work_date.localeCompare(a.work_date));
+      const rank = e => BILL.order.indexOf(BILL.of(e));
+      rows.sort((a,b)=>
+          sort==="hrs"     ? b.hours - a.hours
+        : sort==="old"     ? a.work_date.localeCompare(b.work_date)
+        : sort==="bill"    ? (rank(a) - rank(b)) || b.work_date.localeCompare(a.work_date)
+        : sort==="billrev" ? (rank(b) - rank(a)) || b.work_date.localeCompare(a.work_date)
+        :                    b.work_date.localeCompare(a.work_date));
 
       const hl = s => { const t=esc(s); if(!term) return t;
         return t.replace(new RegExp("("+term.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","ig"), "<mark>$1</mark>"); };
@@ -1723,20 +1779,13 @@ const UI = {
           <div class="meta"><b>${hl(e.client)}</b><span>${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}${T.range(e.start_time,e.end_time)?`<br>${esc(T.range(e.start_time,e.end_time))}`:""}${MI.of(e)?`<br>${MI.fmt(MI.of(e))} mi`:""}</span></div>
           <div class="txt">${e.address?`<div class="times" style="margin-bottom:4px">${hl(e.address)}</div>`:""}${hl(e.notes)}</div>
           <div class="hh tnum">${hFmt(e.hours)}h</div>
-          ${BILL.pill(e, true)}
+          ${BILL.select(e)}
           <button class="btn ghost sm" data-edit="${e.id}">Edit</button>
         </div>`).join("")
         : `<div class="empty"><b>Nothing found</b>${term?`No entries match “${esc(term)}”.`:"Log your first job to build history."}</div>`;
 
       document.querySelectorAll("#rl [data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
-      document.querySelectorAll("#rl [data-bill]").forEach(b => b.onclick = ()=>{
-        const row = DB.s.entries.find(x => x.id === b.dataset.bill);
-        if(!row) return;
-        const next = BILL.next(BILL.of(row));
-        DB.update(row.id, { billed: next });
-        this.toast(row.client + " — " + BILL.label[next]);
-        run();
-      });
+      BILL.wire(document.getElementById("rl"), run);
     };
     q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run); qp.addEventListener("change",run);
     document.getElementById("csv").onclick = ()=>{
