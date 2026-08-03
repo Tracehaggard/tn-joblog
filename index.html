@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-02x">
+<meta name="build" content="2026-08-03a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -438,6 +438,33 @@ ol.steps li{margin-bottom:9px}
   .panel{border:none}
   .grp-b{display:block!important}
 }
+/* calculated vs invoiced comparison */
+.cmp{width:100%;border-collapse:collapse;font-size:13.5px}
+.cmp thead th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:650;text-align:right;padding:8px 18px 8px 0}
+.cmp thead th:first-child{text-align:left;padding-left:18px}
+.cmp tbody th{text-align:left;font-weight:600;color:var(--ink-2);padding:9px 0 9px 18px;
+  border-top:1px solid var(--line-2)}
+.cmp tbody td{text-align:right;padding:9px 18px 9px 0;border-top:1px solid var(--line-2)}
+.cmp tbody tr:last-child th,.cmp tbody tr:last-child td{padding-bottom:15px}
+
+/* invoice grouping */
+.inv{border-top:1px solid var(--line-2)}
+.inv:first-child{border-top:0}
+.inv-h{display:flex;align-items:center;gap:12px;width:100%;background:none;border:0;cursor:pointer;
+  padding:13px 18px;text-align:left;font:inherit}
+.inv-h:hover{background:#fafbfc}
+.inv-no{font-weight:680;font-size:14.5px;font-variant-numeric:tabular-nums}
+.inv-m{font-size:12.5px;color:var(--ink-3)}
+.inv-amt{margin-left:auto;font-weight:660;font-variant-numeric:tabular-nums}
+.inv-b{display:none;padding:0 18px 14px 18px}
+.inv.open .inv-b{display:block}
+.inv.open .inv-h{background:#fafbfc}
+@media(max-width:860px){
+  .cmp{font-size:12.5px}
+  .cmp thead th,.cmp tbody td{padding-right:12px}
+  .cmp thead th:first-child,.cmp tbody th{padding-left:12px}
+}
 </style>
 </head>
 <body>
@@ -651,6 +678,8 @@ const DB = {
       billed: e.billed || "unbilled",
       rate: Number(e.rate || 0),
       sub_id: e.subId || null,
+      amount_billed: (e.amountBilled === "" || e.amountBilled == null) ? null : Number(e.amountBilled),
+      invoice_no: (e.invoiceNo || "").trim(),
       updated_at: new Date().toISOString(), deleted: false
     };
     this.s.entries.push(row); this.save(); Cloud.push([row]);
@@ -931,6 +960,8 @@ const Cloud = {
         miles_end:   x.miles_end==null   ? null : Number(x.miles_end),
         notes:x.notes||"", person:x.person||"", billed:x.billed||"unbilled",
         rate:Number(x.rate||0), sub_id:x.sub_id||null,
+        amount_billed: x.amount_billed==null ? null : Number(x.amount_billed),
+        invoice_no: x.invoice_no||"",
         updated_at:x.updated_at||"", deleted:!!x.deleted
       })));
       this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
@@ -963,6 +994,8 @@ const Cloud = {
       miles_end:   (r.miles_end===""  ||r.miles_end==null)   ? null : this.num(r.miles_end,null),
       notes:r.notes||"", person:r.person||"", billed:r.billed||"unbilled",
       rate:this.num(r.rate,0), sub_id:r.sub_id||null,
+      amount_billed: (r.amount_billed===""||r.amount_billed==null) ? null : this.num(r.amount_billed,null),
+      invoice_no: r.invoice_no||"",
       updated_at:r.updated_at||now, deleted:!!r.deleted };
   },
   clean(rows, table){ return rows.map(r => this.shape(r, table)); },
@@ -1109,8 +1142,50 @@ const RATE = {
   waived(e){ return BILL.free(e) ? Number(e.hours || 0) * RATE.of(e) : 0; },
   total(list){ return list.reduce((t,e)=> t + RATE.amount(e), 0); },
   totalWaived(list){ return list.reduce((t,e)=> t + RATE.waived(e), 0); },
+
+  /* ---- what was actually invoiced, which is often not hours x rate ---- */
+  hasBilled(e){ return e.amount_billed !== null && e.amount_billed !== undefined && e.amount_billed !== ""; },
+  billedOf(e){ return RATE.hasBilled(e) ? Number(e.amount_billed) : 0; },
+  /* real money for this job: the typed figure when there is one, else the calculation */
+  actual(e){ return BILL.free(e) ? 0 : (RATE.hasBilled(e) ? Number(e.amount_billed) : RATE.amount(e)); },
+  actualTotal(list){ return list.reduce((t,e)=> t + RATE.actual(e), 0); },
+  /* +ve means invoiced above the calculated figure, -ve means under */
+  gap(list){ return RATE.actualTotal(list) - RATE.total(list); },
+  overrides(list){ return list.filter(RATE.hasBilled).length; },
+
   /* entries between two ISO dates, inclusive */
   between(a, b){ return DB.live().filter(e => e.work_date >= a && e.work_date <= b); }
+};
+
+/* invoice numbers — one may cover a single job or a whole batch of them */
+const INV = {
+  of(e){ return String(e.invoice_no || "").trim(); },
+  has(e){ return INV.of(e) !== ""; },
+  /* group entries by invoice number, newest invoice first */
+  groups(list){
+    const m = new Map();
+    list.filter(INV.has).forEach(e => {
+      const k = INV.of(e);
+      if(!m.has(k)) m.set(k, []);
+      m.get(k).push(e);
+    });
+    return [...m.entries()].map(([no, entries]) => {
+      entries.sort((a,b)=> a.work_date.localeCompare(b.work_date));
+      const clients = [...new Set(entries.map(e=>e.client))];
+      return {
+        no, entries, clients,
+        hours: entries.reduce((t,e)=> t + Number(e.hours||0), 0),
+        amount: RATE.actualTotal(entries),
+        calc: RATE.total(entries),
+        first: entries[0].work_date,
+        last: entries[entries.length-1].work_date,
+        status: entries.every(e=>BILL.of(e)==="billed") ? "billed"
+              : entries.some(e=>BILL.of(e)==="billed"||BILL.of(e)==="partial") ? "partial" : "unbilled"
+      };
+    }).sort((a,b)=> b.last.localeCompare(a.last) || b.no.localeCompare(a.no));
+  },
+  /* every invoice number already used, for the datalist */
+  all(){ return [...new Set(DB.live().map(INV.of).filter(Boolean))].sort().reverse(); }
 };
 
 /* recurring subscriptions */
@@ -1223,7 +1298,8 @@ const UI = {
   weekOffset: 0,
   who: "",          /* "" = everyone */
   bill: "",         /* "" = any status, "open" = needs billing, "billed" = billed */
-  weekView: "client",   /* client | day */
+  weekView: "client",
+  findView: "entry",   /* entry | invoice */
   draftHours: "",
 
   async boot(){
@@ -1385,7 +1461,7 @@ const UI = {
   updateWaiting: null,
 
   draftFields: ["i-client","i-date","i-address","i-billed","i-start","i-end",
-                "i-hours","i-rate","i-mstart","i-mend","i-notes",
+                "i-hours","i-rate","i-amt","i-inv","i-mstart","i-mend","i-notes",
                 "r-item","r-qty","r-price","r-cycle","r-due"],
 
   readDraft(){
@@ -1519,6 +1595,20 @@ const UI = {
                            value="${DB.s.rate || ""}" placeholder="0" style="width:130px">
                   </div>
                   <div class="calc" id="i-money"><b>—</b><span>Set an hourly rate to price this job</span></div>
+                </div>
+
+                <div class="timerow" style="margin-top:14px">
+                  <div class="tf">
+                    <label class="f" for="i-amt">Amount billed <span style="font-weight:500;color:var(--ink-3)">— optional</span></label>
+                    <input class="inp tnum" id="i-amt" type="number" step="0.01" min="0" inputmode="decimal"
+                           placeholder="leave blank" style="width:150px">
+                  </div>
+                  <div class="tf">
+                    <label class="f" for="i-inv">Invoice #</label>
+                    <input class="inp" id="i-inv" list="invlist" autocomplete="off" placeholder="e.g. 1043" style="width:150px">
+                    <datalist id="invlist">${INV.all().slice(0,40).map(n=>`<option value="${esc(n)}">`).join("")}</datalist>
+                  </div>
+                  <div class="calc" id="i-bill"><b>—</b><span>Only if the invoice differs from the calculation</span></div>
                 </div>
               </div>
 
@@ -1715,6 +1805,30 @@ const UI = {
     [start, end, hours].forEach(el => el.addEventListener("input", paintMoney));
     paintMoney();
 
+    /* amount billed vs the calculation */
+    const amtEl = document.getElementById("i-amt");
+    const invEl = document.getElementById("i-inv");
+    const billEl = document.getElementById("i-bill");
+    const paintBill = () => {
+      const amt = amtEl.value === "" ? null : Number(amtEl.value);
+      const calc = currentHours() * Number(rateEl.value || 0);
+      if(amt === null){
+        billEl.className = "calc";
+        billEl.innerHTML = calc
+          ? `<b>—</b><span>Will use the calculated ${$m(calc)}</span>`
+          : `<b>—</b><span>Only if the invoice differs from the calculation</span>`;
+        return;
+      }
+      const d = amt - calc;
+      billEl.className = "calc live";
+      billEl.innerHTML = calc
+        ? `<b class="tnum">${$m(amt)}</b><span>${d===0 ? "same as calculated" :
+            (d>0?"+":"−") + $m(Math.abs(d)) + " vs calculated " + $m(calc)}</span>`
+        : `<b class="tnum">${$m(amt)}</b><span>invoiced</span>`;
+    };
+    [amtEl, rateEl, start, end, hours].forEach(el => el.addEventListener("input", paintBill));
+    paintBill();
+
     /* recurring add-on */
     const recur = document.getElementById("i-recur");
     const pane  = document.getElementById("recurPane");
@@ -1807,6 +1921,8 @@ const UI = {
                address: addr.value, milesStart:mStart, milesEnd:mEnd,
                billed: document.getElementById("i-billed").value,
                rate: Number(rateEl.value || 0),
+               amountBilled: document.getElementById("i-amt").value,
+               invoiceNo: document.getElementById("i-inv").value,
                subId: saved ? saved.id : null });
 
       /* remember the rate so you're not retyping it every job */
@@ -1843,7 +1959,7 @@ const UI = {
         const b = document.querySelector(`#modeSeg button[data-m="${draft.mode}"]`);
         if(b) b.click();
       }
-      paintMoney(); paintMiles(); paint(); paintRecur();
+      paintMoney(); paintBill(); paintMiles(); paint(); paintRecur();
 
       const bar = document.createElement("div");
       bar.style.cssText = "background:#fff7ed;border:1px solid #f0c3a1;color:#9a3a05;border-radius:8px;"+
@@ -1995,6 +2111,9 @@ const UI = {
         const wk = RATE.total(w.rows);
         const mo = RATE.total(RATE.between(mStart, today));
         const yr = RATE.total(RATE.between(yStart, today));
+        const moRows = RATE.between(mStart, today), yrRows = RATE.between(yStart, today);
+        const wkA = RATE.actualTotal(w.rows), moA = RATE.actualTotal(moRows), yrA = RATE.actualTotal(yrRows);
+        const nOver = RATE.overrides(yrRows);
         const subsMo = DB.liveSubs().filter(s=>s.active).reduce((t,s)=> t + SUB.monthly(s), 0);
         const unpriced = w.rows.filter(e => !RATE.of(e) && !BILL.free(e)).length;
         const waivedYr = RATE.totalWaived(RATE.between(yStart, today));
@@ -2027,6 +2146,28 @@ const UI = {
               <div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:650">No Charge · Year</div>
               <div class="tnum" style="font-size:23px;font-weight:660;margin-top:4px;color:var(--ink-3)">${$r(waivedYr)}</div></div>` : ""}
           </div>
+
+          ${nOver ? `
+          <div style="border-top:1px solid var(--line-2)">
+            <div style="padding:12px 18px 4px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+              <span style="font-weight:660;font-size:13.5px">Calculated vs Actually Invoiced</span>
+              <span class="hint" style="margin:0">${nOver} job${nOver===1?"":"s"} this year invoiced at a different amount</span>
+            </div>
+            <table class="cmp">
+              <thead><tr><th></th><th>Hours × Rate</th><th>Actually Invoiced</th><th>Difference</th></tr></thead>
+              <tbody>
+                ${[["This Week",wk,wkA],["This Month",mo,moA],["This Year",yr,yrA]].map(([lab,c,a])=>{
+                  const d = a - c;
+                  return `<tr>
+                    <th>${lab}</th>
+                    <td class="tnum">${$r(c)}</td>
+                    <td class="tnum" style="font-weight:660">${$r(a)}</td>
+                    <td class="tnum" style="color:${d>0?"#0a7d3f":d<0?"#b42318":"var(--ink-3)"}">${d===0?"—":(d>0?"+":"−")+$r(Math.abs(d))}</td>
+                  </tr>`;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>` : ""}
         </div>`;
       })()}
       ${this.weekView === "day" ? this.calendarHTML(w) : `
@@ -2854,6 +2995,20 @@ const UI = {
        </div>
 
        <div class="mb">
+         <label class="f">Invoice</label>
+         <div class="timerow">
+           <div class="tf"><label class="f" for="x-amt" style="font-size:11px">Amount billed</label>
+             <input class="inp tnum" id="x-amt" type="number" step="0.01" min="0" inputmode="decimal"
+                    value="${RATE.hasBilled(e) ? e.amount_billed : ""}" placeholder="leave blank" style="width:150px"></div>
+           <div class="tf"><label class="f" for="x-inv" style="font-size:11px">Invoice #</label>
+             <input class="inp" id="x-inv" list="xinv" value="${esc(INV.of(e))}" autocomplete="off" placeholder="e.g. 1043" style="width:150px">
+             <datalist id="xinv">${INV.all().slice(0,40).map(n=>`<option value="${esc(n)}">`).join("")}</datalist></div>
+           <div class="calc" id="x-bill" style="min-width:180px"></div>
+         </div>
+         <div class="hint">Leave the amount blank to use hours × rate. Reuse an invoice # across jobs to group them.</div>
+       </div>
+
+       <div class="mb">
          <label class="f">Odometer</label>
          <div class="timerow">
            <div class="tf"><label class="f" for="x-ms" style="font-size:11px">Miles Start</label>
@@ -2942,6 +3097,25 @@ const UI = {
     ["x-hours","x-rate","x-start","x-end"].forEach(i => { const el = $(i); if(el) el.addEventListener("input", paintVal); });
     paintVal();
 
+    const paintBilled = () => {
+      const box = $("x-bill"); if(!box) return;
+      const amt = $("x-amt").value === "" ? null : Number($("x-amt").value);
+      const calc = Number($("x-hours").value||0) * Number($("x-rate").value||0);
+      if(amt === null){
+        box.className = "calc";
+        box.innerHTML = calc ? `<b>—</b><span>Using calculated ${$m(calc)}</span>`
+                             : `<b>—</b><span>No amount set</span>`;
+        return;
+      }
+      const d = amt - calc;
+      box.className = "calc live";
+      box.innerHTML = calc
+        ? `<b class="tnum">${$m(amt)}</b><span>${d===0?"same as calculated":(d>0?"+":"−")+$m(Math.abs(d))+" vs "+$m(calc)}</span>`
+        : `<b class="tnum">${$m(amt)}</b><span>invoiced</span>`;
+    };
+    ["x-amt","x-hours","x-rate","x-start","x-end"].forEach(i => { const el = $(i); if(el) el.addEventListener("input", paintBilled); });
+    paintBilled();
+
     const paintM = () => {
       const a = $("x-ms").value === "" ? null : Number($("x-ms").value);
       const b = $("x-me").value === "" ? null : Number($("x-me").value);
@@ -3025,7 +3199,9 @@ const UI = {
         person: $("x-person").value.trim(),
         billed: $("x-billed").value,
         start_time: $("x-start").value, end_time: $("x-end").value,
-        miles_start: ms, miles_end: me
+        miles_start: ms, miles_end: me,
+        amount_billed: $("x-amt").value === "" ? null : Number($("x-amt").value),
+        invoice_no: $("x-inv").value.trim()
       });
       this.closeModal();
       this.toast(newSubId ? "Entry updated · subscription added to Recurring" : "Entry updated");
@@ -3069,7 +3245,7 @@ const UI = {
         <div class="panel-b">
           <div class="row">
             <div class="col" style="flex:2"><label class="f" for="q">Search</label>
-              <input class="inp" id="q" placeholder="Client, or anything in the notes…" autocomplete="off"></div>
+              <input class="inp" id="q" placeholder="Client, invoice #, or anything in the notes…" autocomplete="off"></div>
             <div class="col"><label class="f" for="qc">Client</label>
               <select class="inp" id="qc"><option value="">All clients</option>${cl.map(c=>`<option>${esc(c)}</option>`).join("")}</select></div>
             <div class="col"><label class="f" for="qp">Who</label>
@@ -3095,7 +3271,13 @@ const UI = {
         </div>
       </div>
       <div class="panel"><div class="panel-h"><h2 id="rc">All Entries</h2>
-        <button class="btn sm" id="csv">Export CSV</button></div>
+        <span style="display:flex;align-items:center;gap:10px">
+          <div class="seg" id="findSeg">
+            <button type="button" data-fv="entry"${this.findView!=="invoice"?" class='on'":""}>By Entry</button>
+            <button type="button" data-fv="invoice"${this.findView==="invoice"?" class='on'":""}>By Invoice</button>
+          </div>
+          <button class="btn sm" id="csv">Export CSV</button>
+        </span></div>
         <div id="rl"></div>
       </div>`;
   },
@@ -3109,7 +3291,7 @@ const UI = {
       if(cli) rows = rows.filter(e=>e.client===cli);
       if(per) rows = rows.filter(e=>(e.person||"").trim().toLowerCase()===per.toLowerCase());
       if(bill) rows = rows.filter(e => bill==="open" ? BILL.open(e) : BILL.of(e)===bill);
-      if(term) rows = rows.filter(e=> (e.client+" "+e.notes+" "+(e.person||"")+" "+(e.address||"")).toLowerCase().includes(term));
+      if(term) rows = rows.filter(e=> (e.client+" "+e.notes+" "+(e.person||"")+" "+(e.address||"")+" "+INV.of(e)).toLowerCase().includes(term));
       const rank = e => BILL.order.indexOf(BILL.of(e));
       rows.sort((a,b)=>
           sort==="hrs"     ? b.hours - a.hours
@@ -3126,11 +3308,45 @@ const UI = {
       const open = BILL.openHours(rows);
       document.getElementById("rc").textContent = rows.length + " entr" + (rows.length===1?"y":"ies") + " · " + hFmt(total) + "h"
         + (miles? " · "+MI.fmt(miles)+" mi" : "") + (RATE.total(rows)? " · " + $r(RATE.total(rows)) : "") + (open? " · " + hFmt(open) + "h to bill" : "");
+      if(this.findView === "invoice"){
+        const groups = INV.groups(rows);
+        const loose  = rows.filter(e => !INV.has(e));
+        document.getElementById("rc").textContent =
+          groups.length + " invoice" + (groups.length===1?"":"s") + " · " +
+          $r(groups.reduce((t,g)=>t+g.amount,0)) +
+          (loose.length ? " · " + loose.length + " entr" + (loose.length===1?"y":"ies") + " with no invoice #" : "");
+        document.getElementById("rl").innerHTML = groups.length ? groups.map((g,i)=>`
+          <div class="inv${i===0?" open":""}">
+            <button class="inv-h">
+              <i class="car">▶</i>
+              <span>
+                <span class="inv-no">#${esc(g.no)}</span>
+                <span class="pill ${g.status}" style="margin-left:8px">${BILL.label[g.status]}</span>
+                <div class="inv-m">${g.clients.map(esc).join(", ")} · ${g.entries.length} job${g.entries.length===1?"":"s"} · ${hFmt(g.hours)}h · ${esc(D.dayLbl(g.first))}${g.first!==g.last?" – "+esc(D.dayLbl(g.last)):""}</div>
+              </span>
+              <span class="inv-amt">${$r(g.amount)}${g.amount!==g.calc?`<small style="display:block;font-size:11px;font-weight:600;color:var(--ink-3);text-align:right">calc ${$r(g.calc)}</small>`:""}</span>
+            </button>
+            <div class="inv-b">
+              ${g.entries.map(e=>`
+                <div class="res" style="border:0;border-top:1px solid var(--line-2)">
+                  <div class="meta"><b>${hl(e.client)}</b><span>${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}</span></div>
+                  <div class="txt">${hl(e.notes)}</div>
+                  <div class="hh tnum">${hFmt(e.hours)}h${RATE.actual(e)?`<small style="display:block;font-size:11px;font-weight:600;color:var(--ink-3)">${$m(RATE.actual(e))}</small>`:""}</div>
+                  <button class="btn ghost sm" data-edit="${e.id}">Edit</button>
+                </div>`).join("")}
+            </div>
+          </div>`).join("")
+          : `<div class="empty"><b>No invoice numbers yet</b>Add one to an entry and it'll group here.</div>`;
+        document.querySelectorAll("#rl .inv-h").forEach(b => b.onclick = ()=> b.parentElement.classList.toggle("open"));
+        document.querySelectorAll("#rl [data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
+        return;
+      }
+
       document.getElementById("rl").innerHTML = rows.length ? rows.map(e=>`
         <div class="res">
           <div class="meta"><b>${hl(e.client)}</b><span>${esc(D.dayLbl(e.work_date))}${e.person?" · "+esc(e.person):""}${T.range(e.start_time,e.end_time)?`<br>${esc(T.range(e.start_time,e.end_time))}`:""}${MI.of(e)?`<br>${MI.fmt(MI.of(e))} mi`:""}</span></div>
           <div class="txt">${e.address?`<div class="times" style="margin-bottom:4px">${hl(e.address)}</div>`:""}${hl(e.notes)}</div>
-          <div class="hh tnum">${hFmt(e.hours)}h${RATE.amount(e)?`<small style="display:block;font-size:11px;font-weight:600;color:var(--ink-3)">${$m(RATE.amount(e))}</small>`:""}</div>
+          <div class="hh tnum">${hFmt(e.hours)}h${RATE.actual(e)?`<small style="display:block;font-size:11px;font-weight:600;color:${RATE.hasBilled(e)?"var(--accent)":"var(--ink-3)"}">${$m(RATE.actual(e))}</small>`:""}${INV.has(e)?`<small style="display:block;font-size:10.5px;font-weight:600;color:var(--ink-3)">#${esc(INV.of(e))}</small>`:""}</div>
           ${BILL.select(e)}
           <button class="btn ghost sm" data-edit="${e.id}">Edit</button>
         </div>`).join("")
@@ -3139,12 +3355,19 @@ const UI = {
       document.querySelectorAll("#rl [data-edit]").forEach(b => b.onclick = ()=> this.editEntry(b.dataset.edit));
       BILL.wire(document.getElementById("rl"), run);
     };
-    q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run); qp.addEventListener("change",run);
+    q.addEventListener("input",run); qc.addEventListener("change",run); qs.addEventListener("change",run);
+    qp.addEventListener("change",run); qb.addEventListener("change",run);   /* the billing filter was never wired up */
+    document.querySelectorAll("#findSeg button").forEach(b => b.addEventListener("click", ()=>{
+      this.findView = b.dataset.fv;
+      document.querySelectorAll("#findSeg button").forEach(x=>x.classList.toggle("on", x===b));
+      run();
+    }));
     document.getElementById("csv").onclick = ()=>{
       const rows = DB.live().slice().sort((a,b)=>a.work_date.localeCompare(b.work_date));
-      const csv = ["Date,Client,Address,Start,End,Hours,Rate,Amount,Miles Start,Miles End,Miles Driven,Billing,Logged By,Notes"].concat(rows.map(e =>
+      const csv = ["Date,Client,Address,Start,End,Hours,Rate,Calculated,Amount Billed,Invoice #,Miles Start,Miles End,Miles Driven,Billing,Logged By,Notes"].concat(rows.map(e =>
         [e.work_date, e.client, e.address||"", T.label(e.start_time), T.label(e.end_time), e.hours,
          RATE.of(e)||"", RATE.amount(e)?RATE.amount(e).toFixed(2):"",
+         RATE.hasBilled(e)?Number(e.amount_billed).toFixed(2):"", INV.of(e),
          e.miles_start==null?"":e.miles_start, e.miles_end==null?"":e.miles_end, MI.of(e)||"",
          BILL.label[BILL.of(e)], e.person||"", e.notes]
           .map(x=>`"${String(x).replace(/"/g,'""')}"`).join(",")
