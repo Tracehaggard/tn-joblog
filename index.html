@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-03c">
+<meta name="build" content="2026-08-03d">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -1808,6 +1808,13 @@ const UI = {
         touched = false;
         dirty.textContent = "Saved";
         dirty.style.color = "";
+        /* keep the list in step without a full re-render, which would steal the cursor */
+        const item = document.querySelector(`.nitem[data-note="${open.id}"]`);
+        if(item){
+          const tEl = item.querySelector(".ntitle"), pEl = item.querySelector(".nprev");
+          if(tEl) tEl.innerHTML = (open.pinned?`<span class="npin">PIN</span>`:"") + esc(title.value.trim() || "Untitled");
+          if(pEl) pEl.textContent = body.value.replace(/\s+/g," ").trim().slice(0,80) || "Empty";
+        }
       };
       /* autosave a moment after typing stops, so a note is never lost mid-thought */
       const queue = () => {
