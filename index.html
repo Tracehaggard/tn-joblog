@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-03b">
+<meta name="build" content="2026-08-03c">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -438,6 +438,48 @@ ol.steps li{margin-bottom:9px}
   .panel{border:none}
   .grp-b{display:block!important}
 }
+/* ---- schedule ---- */
+.jday + .jday{border-top:1px solid var(--line-2)}
+.jdate{display:flex;align-items:center;gap:8px;padding:10px 18px;background:#fafbfc;
+  font-weight:660;font-size:13px;border-bottom:1px solid var(--line-2)}
+.jdate span{font-weight:500;color:var(--ink-3);font-size:12.5px}
+.jdate.today{background:#fff7ed;color:#9a3a05}
+.jdate.today span{color:#b8570f}
+.jdate.past{background:#fef3f2;color:#912018}
+.jrow{display:flex;align-items:flex-start;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line-2)}
+.jrow:last-child{border-bottom:0}
+.jrow.done{opacity:.55}
+.jrow.done .jcl{text-decoration:line-through}
+.jtime{flex:0 0 128px;font-size:13px;font-weight:600;color:var(--ink-2);padding-top:1px}
+.jmain{flex:1;min-width:0}
+.jcl{font-weight:650;font-size:14.5px}
+.jwho{font-weight:500;font-size:12px;color:var(--ink-3);margin-left:8px;
+  border:1px solid var(--line);border-radius:20px;padding:1px 8px}
+.jad{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+.jwt{font-size:13.5px;color:var(--ink-2);margin-top:5px;white-space:pre-wrap}
+.jact{display:flex;gap:6px;align-items:center;flex:0 0 auto}
+.jempty{padding:14px 18px;color:var(--ink-3);font-size:13px}
+
+/* ---- notes ---- */
+.nitem{display:block;width:100%;text-align:left;background:none;border:0;font:inherit;cursor:pointer;
+  padding:12px 18px;border-bottom:1px solid var(--line-2)}
+.nitem:hover{background:#fafbfc}
+.nitem.on{background:#fff7ed;box-shadow:inset 3px 0 0 var(--accent)}
+.ntitle{font-weight:650;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.npin{font-size:9.5px;font-weight:700;letter-spacing:.06em;color:#fff;background:var(--accent);
+  border-radius:3px;padding:1px 5px;margin-right:7px;vertical-align:1px}
+.nprev{font-size:12.5px;color:var(--ink-3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nmeta{font-size:11.5px;color:var(--ink-3);margin-top:5px}
+.ntitle-in{font-size:19px;font-weight:660;padding:11px 13px;margin-bottom:12px}
+.nbody{min-height:340px;line-height:1.65;resize:vertical;font-size:14.5px}
+@media(max-width:860px){
+  .jtime{flex:0 0 88px;font-size:12.5px}
+  .jrow{flex-wrap:wrap}
+  .jact{width:100%;padding-left:102px}
+  .nbody{min-height:220px}
+  .col[style*="max-width:340px"]{max-width:none!important}
+}
+
 /* calculated vs invoiced comparison */
 .cmp{width:100%;border-collapse:collapse;font-size:13.5px}
 .cmp thead th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);
@@ -480,10 +522,12 @@ ol.steps li{margin-bottom:9px}
     <nav class="nav" id="nav">
       <button data-v="log" class="on"><i class="dot"></i>New Entry</button>
       <button data-v="week"><i class="dot"></i>Week Report</button>
+      <button data-v="sched"><i class="dot"></i>Schedule</button>
       <button data-v="cal"><i class="dot"></i>Calendar</button>
       <button data-v="clients"><i class="dot"></i>Clients</button>
       <button data-v="subs"><i class="dot"></i>Recurring</button>
       <button data-v="find"><i class="dot"></i>History</button>
+      <button data-v="notes"><i class="dot"></i>Notes</button>
       <button data-v="set"><i class="dot"></i>Settings</button>
     </nav>
     <div class="rail-foot">
@@ -496,10 +540,12 @@ ol.steps li{margin-bottom:9px}
     <b>TN INFO TECH</b>
     <button data-v="log" class="on">Log</button>
     <button data-v="week">Week</button>
+    <button data-v="sched">Schedule</button>
     <button data-v="cal">Month</button>
     <button data-v="clients">Clients</button>
     <button data-v="subs">Recurring</button>
     <button data-v="find">Search</button>
+    <button data-v="notes">Notes</button>
     <button data-v="set">Settings</button>
   </div>
 
@@ -635,7 +681,7 @@ function uuid(){
 }
 
 const DB = {
-  s: { entries: [], clients: {}, subs: [], person: "", url: "", key: "", weekStart: 1, round: 0, mode: "clock", rate: 0, lock: null },
+  s: { entries: [], clients: {}, subs: [], jobs: [], notes: [], person: "", url: "", key: "", weekStart: 1, round: 0, mode: "clock", rate: 0, lock: null },
 
   load(){
     try{ const r = localStorage.getItem(KEY); if(r) Object.assign(this.s, JSON.parse(r)); }catch(e){}
@@ -713,6 +759,8 @@ const DB = {
     };
     (this.s.entries||[]).forEach(fix);
     (this.s.subs||[]).forEach(fix);
+    (this.s.jobs||[]).forEach(fix);
+    (this.s.notes||[]).forEach(fix);
     Object.keys(this.s.clients||{}).forEach(k => {
       const c = this.s.clients[k];
       if(c && !c.id) { c.id = k; fixed++; }      /* clients are keyed by name, not uuid */
@@ -762,6 +810,70 @@ const DB = {
     rows.forEach(r => {
       const cur = byId.get(r.id);
       if(!cur){ this.s.subs.push(r); byId.set(r.id, r); n++; }
+      else if((r.updated_at||"") > (cur.updated_at||"")){ Object.assign(cur, r); n++; }
+    });
+    if(n) this.save();
+    return n;
+  },
+
+  /* ---- schedule: jobs planned for the days ahead ---- */
+  liveJobs(){ return this.s.jobs.filter(j => !j.deleted); },
+  saveJob(job){
+    const isNew = !job.id;
+    const row = Object.assign({
+      id: isNew ? uuid() : job.id, status: "planned", entry_id: null, deleted: false
+    }, job, { updated_at: new Date().toISOString() });
+    if(!row.id) row.id = uuid();
+    const i = this.s.jobs.findIndex(x => x.id === row.id);
+    if(i >= 0) Object.assign(this.s.jobs[i], row); else this.s.jobs.push(row);
+    this.save(); Cloud.push([row], "jobs");
+    if(row.client) this.saveClient({ name: row.client, address: row.address || undefined });
+    return row;
+  },
+  removeJob(id){
+    const r = this.s.jobs.find(x => x.id === id);
+    if(!r) return;
+    r.deleted = true; r.updated_at = new Date().toISOString();
+    this.save(); Cloud.push([r], "jobs");
+  },
+  mergeJobs(rows){
+    let n = 0;
+    const byId = new Map(this.s.jobs.map(j => [j.id, j]));
+    rows.forEach(r => {
+      const cur = byId.get(r.id);
+      if(!cur){ this.s.jobs.push(r); byId.set(r.id, r); n++; }
+      else if((r.updated_at||"") > (cur.updated_at||"")){ Object.assign(cur, r); n++; }
+    });
+    if(n) this.save();
+    return n;
+  },
+
+  /* ---- notes: shared reference anyone can add to ---- */
+  liveNotes(){ return this.s.notes.filter(n => !n.deleted); },
+  saveNote(note){
+    const isNew = !note.id;
+    const row = Object.assign({
+      id: isNew ? uuid() : note.id, pinned: false, deleted: false,
+      author: this.s.person || ""
+    }, note, { updated_at: new Date().toISOString() });
+    if(!row.id) row.id = uuid();
+    const i = this.s.notes.findIndex(x => x.id === row.id);
+    if(i >= 0) Object.assign(this.s.notes[i], row); else this.s.notes.push(row);
+    this.save(); Cloud.push([row], "notes");
+    return row;
+  },
+  removeNote(id){
+    const r = this.s.notes.find(x => x.id === id);
+    if(!r) return;
+    r.deleted = true; r.updated_at = new Date().toISOString();
+    this.save(); Cloud.push([r], "notes");
+  },
+  mergeNotes(rows){
+    let n = 0;
+    const byId = new Map(this.s.notes.map(x => [x.id, x]));
+    rows.forEach(r => {
+      const cur = byId.get(r.id);
+      if(!cur){ this.s.notes.push(r); byId.set(r.id, r); n++; }
       else if((r.updated_at||"") > (cur.updated_at||"")){ Object.assign(cur, r); n++; }
     });
     if(n) this.save();
@@ -940,6 +1052,26 @@ const Cloud = {
         }))))
         .catch(()=>{});
 
+      /* the week ahead */
+      fetch(this.base("jobs")+"?select=*", { headers: this.head() })
+        .then(res => res.ok ? res.json() : [])
+        .then(js => DB.mergeJobs(js.map(j => ({
+          id:j.id, job_date:j.job_date||"", start_time:j.start_time||"", end_time:j.end_time||"",
+          client:j.client||"", address:j.address||"", what:j.what||"", person:j.person||"",
+          status:j.status||"planned", entry_id:j.entry_id||null,
+          updated_at:j.updated_at||"", deleted:!!j.deleted
+        }))))
+        .catch(()=>{});
+
+      /* shared notes */
+      fetch(this.base("notes")+"?select=*", { headers: this.head() })
+        .then(res => res.ok ? res.json() : [])
+        .then(ns => DB.mergeNotes(ns.map(n => ({
+          id:n.id, title:n.title||"", body:n.body||"", pinned:!!n.pinned, author:n.author||"",
+          updated_at:n.updated_at||"", deleted:!!n.deleted
+        }))))
+        .catch(()=>{});
+
       /* recurring subscriptions too */
       fetch(this.base("subs")+"?select=*", { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
@@ -982,6 +1114,14 @@ const Cloud = {
     if(table === "clients") return {
       id:r.id, name:r.name||"", address:r.address||"", phone:r.phone||"",
       contact:r.contact||"", note:r.note||"",
+      updated_at:r.updated_at||now, deleted:!!r.deleted };
+    if(table === "jobs") return {
+      id:r.id, job_date:this.dt(r.job_date), start_time:r.start_time||"", end_time:r.end_time||"",
+      client:r.client||"", address:r.address||"", what:r.what||"", person:r.person||"",
+      status:r.status||"planned", entry_id:r.entry_id||null,
+      updated_at:r.updated_at||now, deleted:!!r.deleted };
+    if(table === "notes") return {
+      id:r.id, title:r.title||"", body:r.body||"", pinned:!!r.pinned, author:r.author||"",
       updated_at:r.updated_at||now, deleted:!!r.deleted };
     if(table === "subs") return {
       id:r.id, client:r.client||"", item:r.item||"",
@@ -1068,8 +1208,10 @@ const Cloud = {
     const a = await this.push(DB.s.entries);
     const b = await this.push(Object.values(DB.s.clients), "clients");
     const c = await this.push(DB.s.subs, "subs");
-    if(a && b && c) this.clearAlarm();
-    return a && b && c;
+    const d = await this.push(DB.s.jobs, "jobs");
+    const e = await this.push(DB.s.notes, "notes");
+    if(a && b && c && d && e) this.clearAlarm();
+    return a && b && c && d && e;
   },
   async test(url, key){
     const r = await fetch(url.replace(/\/+$/,"")+"/rest/v1/entries?select=id&limit=1", {
@@ -1455,7 +1597,318 @@ const UI = {
     if(this.view==="clients"){ this.vClients(v); }
     if(this.view==="subs")   { this.vSubs(v); }
     if(this.view==="find") { this.head("History","Every job, searchable."); v.innerHTML = this.vFind(); this.wireFind(); }
+    if(this.view==="sched"){ this.vSched(v); }
+    if(this.view==="notes"){ this.vNotes(v); }
     if(this.view==="set")  { this.head("Settings","Your name, and shared access for the crew."); v.innerHTML = this.vSet(); this.wireSet(); }
+  },
+
+  /* ---------- SCHEDULE ---------- */
+  schedOffset: 0,   /* 0 = this week, 1 = next week, -1 = last */
+
+  vSched(v){
+    const today = D.today();
+    const base  = D.addDays(D.weekStart(new Date(), DB.s.weekStart), this.schedOffset*7);
+    const days  = [...Array(7)].map((_,i)=> D.iso(D.addDays(base,i)));
+    const from = days[0], to = days[6];
+
+    const all   = DB.liveJobs();
+    const week  = all.filter(j => j.job_date >= from && j.job_date <= to);
+    const open  = week.filter(j => j.status !== "done");
+    const later = all.filter(j => j.job_date > to && j.status !== "done")
+                     .sort((a,b)=> a.job_date.localeCompare(b.job_date) || (a.start_time||"").localeCompare(b.start_time||""));
+    const overdue = all.filter(j => j.status !== "done" && j.job_date < today)
+                       .sort((a,b)=> a.job_date.localeCompare(b.job_date));
+
+    this.head("Schedule", this.schedOffset===0 ? "Where you need to be this week."
+              : this.schedOffset===1 ? "Next week." : D.short(base) + " – " + D.short(D.addDays(base,6)));
+
+    const jobRow = j => {
+      const when = T.range(j.start_time, j.end_time) || (j.start_time ? T.label(j.start_time) : "");
+      const done = j.status === "done";
+      return `
+      <div class="jrow${done?" done":""}">
+        <div class="jtime tnum">${when ? esc(when) : `<span style="color:var(--ink-3)">—</span>`}</div>
+        <div class="jmain">
+          <div class="jcl">${esc(j.client || "(no client)")}${j.person?`<span class="jwho">${esc(j.person)}</span>`:""}</div>
+          ${j.address?`<div class="jad">${esc(j.address)}</div>`:""}
+          ${j.what?`<div class="jwt">${esc(j.what)}</div>`:""}
+        </div>
+        <div class="jact noprint">
+          ${done ? `<span class="pill billed">Done</span>`
+                 : `<button class="btn sm accent" data-done="${j.id}">Mark Done</button>`}
+          <button class="btn sm ghost" data-jedit="${j.id}">Edit</button>
+        </div>
+      </div>`;
+    };
+
+    v.innerHTML = `
+      <div class="panel mb">
+        <div class="panel-h">
+          <h2>${this.schedOffset===0?"This Week":this.schedOffset===1?"Next Week":D.short(base)+" – "+D.short(D.addDays(base,6))}</h2>
+          <span style="display:flex;align-items:center;gap:8px">
+            <button class="btn sm" id="sPrev">←</button>
+            <button class="btn sm" id="sToday">This Week</button>
+            <button class="btn sm" id="sNext">→</button>
+            <button class="btn sm accent" id="sAdd">+ Schedule a Job</button>
+          </span>
+        </div>
+        <div class="panel-b" style="padding-top:14px">
+          <div class="stats" style="margin:0">
+            <div class="stat"><div class="k">Jobs Booked</div><div class="v tnum">${open.length}</div></div>
+            <div class="stat"><div class="k">Places</div><div class="v tnum">${new Set(open.map(j=>j.client)).size}</div></div>
+            <div class="stat"><div class="k">Days Out</div><div class="v tnum">${new Set(open.map(j=>j.job_date)).size}</div></div>
+            ${overdue.length?`<div class="stat warn"><div class="k">Past Due</div><div class="v tnum">${overdue.length}</div></div>`:""}
+          </div>
+        </div>
+      </div>
+
+      ${overdue.length && this.schedOffset===0 ? `
+      <div class="panel mb">
+        <div class="panel-h"><h2>Still Open</h2><span class="hint" style="margin:0">Scheduled but never marked done</span></div>
+        <div class="jday">${overdue.map(j=>`
+          <div class="jdate past">${esc(D.dayLbl(j.job_date))}</div>${jobRow(j)}`).join("")}</div>
+      </div>` : ""}
+
+      <div class="panel mb">
+        ${days.map(d => {
+          const list = week.filter(j => j.job_date === d)
+                           .sort((a,b)=> (a.start_time||"~").localeCompare(b.start_time||"~"));
+          const dt = D.parse(d);
+          return `
+          <div class="jday">
+            <div class="jdate${d===today?" today":""}">
+              ${dt.toLocaleDateString(undefined,{weekday:"long"})}
+              <span>${dt.toLocaleDateString(undefined,{month:"numeric",day:"numeric"})}${d===today?" · Today":""}</span>
+              <button class="btn sm ghost noprint" data-addon="${d}" style="margin-left:auto">+</button>
+            </div>
+            ${list.length ? list.map(jobRow).join("")
+              : `<div class="jempty">Nothing scheduled</div>`}
+          </div>`;
+        }).join("")}
+      </div>
+
+      ${later.length ? `
+      <div class="panel">
+        <div class="panel-h"><h2>Coming Up After</h2><span class="hint" style="margin:0">${later.length} job${later.length===1?"":"s"} further out</span></div>
+        <div class="jday">${later.slice(0,12).map(j=>`
+          <div class="jdate">${esc(D.dayLbl(j.job_date))}</div>${jobRow(j)}`).join("")}</div>
+      </div>` : ""}
+    `;
+
+    document.getElementById("sPrev").onclick  = ()=>{ this.schedOffset--; this.render(); };
+    document.getElementById("sNext").onclick  = ()=>{ this.schedOffset++; this.render(); };
+    document.getElementById("sToday").onclick = ()=>{ this.schedOffset = 0; this.render(); };
+    document.getElementById("sAdd").onclick   = ()=> this.editJob(null, days.find(d=>d>=today) || days[0]);
+    v.querySelectorAll("[data-addon]").forEach(b => b.onclick = ()=> this.editJob(null, b.dataset.addon));
+    v.querySelectorAll("[data-jedit]").forEach(b => b.onclick = ()=> this.editJob(b.dataset.jedit));
+    v.querySelectorAll("[data-done]").forEach(b => b.onclick = ()=> this.completeJob(b.dataset.done));
+  },
+
+  /* Mark Done hands the details to the entry form rather than guessing at hours */
+  completeJob(id){
+    const j = DB.liveJobs().find(x => x.id === id);
+    if(!j) return;
+    this.prefill = {
+      client: j.client, address: j.address,
+      date: j.job_date, notes: j.what || "",
+      start: j.start_time || "", end: j.end_time || ""
+    };
+    this.pendingJob = j.id;
+    this.go("log");
+    this.toast("Fill in the time and what you did, then save");
+  },
+
+  /* ---------- NOTES ---------- */
+  noteOpen: null,   /* id of the note being read/edited */
+  noteQ: "",
+
+  vNotes(v){
+    this.head("Notes", "Shared reference for you and Joe.");
+    const term = (this.noteQ||"").trim().toLowerCase();
+    let list = DB.liveNotes();
+    if(term) list = list.filter(n => (n.title+" "+n.body).toLowerCase().includes(term));
+    list.sort((a,b)=> (b.pinned?1:0)-(a.pinned?1:0) || (b.updated_at||"").localeCompare(a.updated_at||""));
+
+    const open = this.noteOpen ? DB.liveNotes().find(n => n.id === this.noteOpen) : null;
+
+    v.innerHTML = `
+      <div class="row" style="align-items:flex-start">
+        <div class="col" style="flex:1;min-width:260px;max-width:340px">
+          <div class="panel">
+            <div class="panel-h"><h2>All Notes</h2>
+              <button class="btn sm accent" id="nAdd">+ New</button></div>
+            <div class="panel-b" style="padding-bottom:10px">
+              <input class="inp" id="nq" placeholder="Search notes…" value="${esc(this.noteQ||"")}" autocomplete="off">
+            </div>
+            <div id="nlist">
+              ${list.length ? list.map(n=>`
+                <button class="nitem${open&&open.id===n.id?" on":""}" data-note="${n.id}">
+                  <div class="ntitle">${n.pinned?`<span class="npin">PIN</span>`:""}${esc(n.title||"Untitled")}</div>
+                  <div class="nprev">${esc((n.body||"").replace(/\s+/g," ").slice(0,80))||"Empty"}</div>
+                  <div class="nmeta">${esc(D.dayLbl((n.updated_at||"").slice(0,10)||D.today()))}${n.author?" · "+esc(n.author):""}</div>
+                </button>`).join("")
+                : `<div class="empty" style="padding:26px 18px"><b>${term?"No matches":"No notes yet"}</b>${term?"Try a different word.":"Start one for gate codes, passwords hints, site quirks — anything you'd both want handy."}</div>`}
+            </div>
+          </div>
+        </div>
+
+        <div class="col" style="flex:2;min-width:320px">
+          ${open ? `
+          <div class="panel">
+            <div class="panel-h">
+              <h2>Note</h2>
+              <span style="display:flex;align-items:center;gap:8px">
+                <span class="hint" style="margin:0" id="nsaved">Saved ${esc(D.dayLbl((open.updated_at||"").slice(0,10)||D.today()))}</span>
+                <button class="btn sm" id="nPin">${open.pinned?"Unpin":"Pin"}</button>
+                <button class="btn sm ghost" id="nDel">Delete</button>
+              </span>
+            </div>
+            <div class="panel-b">
+              <input class="inp ntitle-in" id="n-title" value="${esc(open.title)}" placeholder="Give it a heading…" autocomplete="off">
+              <textarea class="inp nbody" id="n-body" placeholder="Type anything you want to come back to later…">${esc(open.body)}</textarea>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+                <button class="btn accent" id="nSave">Save Note</button>
+                <span class="hint" style="margin:0" id="ndirty"></span>
+              </div>
+            </div>
+          </div>` : `
+          <div class="panel"><div class="empty" style="padding:60px 24px">
+            <b>Pick a note to read it</b>Or start a new one — it's shared with Joe the moment you save.
+          </div></div>`}
+        </div>
+      </div>`;
+
+    const q = document.getElementById("nq");
+    q.addEventListener("input", ()=>{
+      this.noteQ = q.value;
+      const at = q.selectionStart;
+      this.render();
+      const nq = document.getElementById("nq");
+      if(nq){ nq.focus(); nq.setSelectionRange(at, at); }
+    });
+
+    document.getElementById("nAdd").onclick = ()=>{
+      const made = DB.saveNote({ title:"", body:"" });
+      this.noteOpen = made.id; this.noteQ = ""; this.render();
+      setTimeout(()=>{ const t=document.getElementById("n-title"); if(t) t.focus(); }, 60);
+    };
+    v.querySelectorAll("[data-note]").forEach(b => b.onclick = ()=>{
+      this.noteOpen = b.dataset.note; this.render();
+    });
+
+    if(open){
+      const title = document.getElementById("n-title");
+      const body  = document.getElementById("n-body");
+      const dirty = document.getElementById("ndirty");
+      let timer = null, touched = false;
+
+      const store = () => {
+        DB.saveNote({ id: open.id, title: title.value, body: body.value,
+                      pinned: open.pinned, author: open.author || DB.s.person || "" });
+        touched = false;
+        dirty.textContent = "Saved";
+        dirty.style.color = "";
+      };
+      /* autosave a moment after typing stops, so a note is never lost mid-thought */
+      const queue = () => {
+        touched = true;
+        dirty.textContent = "Unsaved…"; dirty.style.color = "var(--accent)";
+        clearTimeout(timer);
+        timer = setTimeout(store, 1200);
+      };
+      title.addEventListener("input", queue);
+      body.addEventListener("input", queue);
+      body.addEventListener("blur", ()=>{ if(touched){ clearTimeout(timer); store(); } });
+      title.addEventListener("blur", ()=>{ if(touched){ clearTimeout(timer); store(); } });
+
+      document.getElementById("nSave").onclick = ()=>{
+        clearTimeout(timer); store(); this.toast("Note saved"); this.render();
+      };
+      document.getElementById("nPin").onclick = ()=>{
+        clearTimeout(timer);
+        DB.saveNote({ id: open.id, title: title.value, body: body.value,
+                      pinned: !open.pinned, author: open.author || DB.s.person || "" });
+        this.toast(open.pinned ? "Unpinned" : "Pinned to the top"); this.render();
+      };
+      document.getElementById("nDel").onclick = ()=>{
+        if(!confirm("Delete this note?\n\n" + (title.value.trim() || "Untitled"))) return;
+        clearTimeout(timer);
+        DB.removeNote(open.id); this.noteOpen = null; this.toast("Note deleted"); this.render();
+      };
+    }
+  },
+
+  editJob(id, presetDate){
+    const j = id ? DB.liveJobs().find(x => x.id === id) : null;
+    const cl = DB.clientList().map(c=>c.name);
+    this.modal(j ? "Edit Scheduled Job" : "Schedule a Job",
+      `<div class="grid2 mb">
+         <div><label class="f" for="j-client">Client / Location</label>
+           <input class="inp" id="j-client" list="jcl" value="${esc(j?j.client:"")}" autocomplete="off" placeholder="Who are you seeing?">
+           <datalist id="jcl">${cl.map(c=>`<option value="${esc(c)}">`).join("")}</datalist></div>
+         <div><label class="f" for="j-date">Date</label>
+           <input class="inp" id="j-date" type="date" value="${esc(j?j.job_date:(presetDate||D.today()))}"></div>
+       </div>
+
+       <div class="mb">
+         <label class="f">Time <span style="font-weight:500;color:var(--ink-3)">— optional</span></label>
+         <div class="timerow">
+           <div class="tf"><label class="f" for="j-start" style="font-size:11px">Start</label>
+             <input class="inp" id="j-start" type="time" value="${esc(j?j.start_time:"")}" style="width:132px"></div>
+           <div class="tf"><label class="f" for="j-end" style="font-size:11px">End</label>
+             <input class="inp" id="j-end" type="time" value="${esc(j?j.end_time:"")}" style="width:132px"></div>
+           <div class="tf" style="flex:1"><label class="f" for="j-person" style="font-size:11px">Who's going</label>
+             <input class="inp" id="j-person" list="jpp" value="${esc(j?j.person:(DB.s.person||""))}" autocomplete="off" placeholder="Trace">
+             <datalist id="jpp">${DB.people().map(p=>`<option value="${esc(p)}">`).join("")}</datalist></div>
+         </div>
+       </div>
+
+       <div class="mb"><label class="f" for="j-addr">Address</label>
+         <input class="inp" id="j-addr" value="${esc(j?j.address:"")}" autocomplete="off" placeholder="Optional — pulls from the client record"></div>
+
+       <div class="mb"><label class="f" for="j-what">What's the job?</label>
+         <textarea class="inp" id="j-what" placeholder="Swap the failed drive in the NAS, bring a spare 4TB">${esc(j?j.what:"")}</textarea></div>
+
+       <div style="display:flex;gap:8px;flex-wrap:wrap">
+         ${j?`<button class="btn ghost" id="j-del">Remove</button>`:""}
+         ${j&&j.status!=="done"?`<button class="btn" id="j-done">Mark Done</button>`:""}
+       </div>`,
+      `<button class="btn" onclick="UI.closeModal()">Cancel</button>
+       <button class="btn accent" id="j-save">${j?"Save Changes":"Add to Schedule"}</button>`);
+
+    const $ = i => document.getElementById(i);
+
+    /* pull the saved address when they pick a known client */
+    $("j-client").addEventListener("change", ()=>{
+      const rec = DB.getClient($("j-client").value);
+      if(rec && rec.address && !$("j-addr").value) $("j-addr").value = rec.address;
+    });
+
+    if($("j-del")) $("j-del").onclick = ()=>{
+      if(!confirm("Remove this from the schedule?")) return;
+      DB.removeJob(j.id); this.closeModal(); this.toast("Removed"); this.render();
+    };
+    if($("j-done")) $("j-done").onclick = ()=>{ this.closeModal(); this.completeJob(j.id); };
+
+    $("j-save").onclick = ()=>{
+      const client = $("j-client").value.trim();
+      const date   = $("j-date").value;
+      if(!client){ this.toast("Who's the job for?"); $("j-client").focus(); return; }
+      if(!date){ this.toast("Pick a date"); $("j-date").focus(); return; }
+      DB.saveJob({
+        id: j ? j.id : undefined,
+        job_date: date, client,
+        start_time: $("j-start").value, end_time: $("j-end").value,
+        address: $("j-addr").value.trim(), what: $("j-what").value.trim(),
+        person: $("j-person").value.trim(),
+        status: j ? j.status : "planned",
+        entry_id: j ? j.entry_id : null
+      });
+      this.closeModal();
+      this.toast(j ? "Schedule updated" : "Added to the schedule");
+      this.render();
+    };
+    setTimeout(()=>{ const c=$("j-client"); if(c && !c.value) c.focus(); }, 60);
   },
 
   /* ---------- UNSAVED DRAFT PROTECTION ---------- */
@@ -1540,7 +1993,7 @@ const UI = {
                 </div>
                 <div>
                   <label class="f" for="i-date">Date</label>
-                  <input class="inp" id="i-date" type="date" value="${D.today()}" required>
+                  <input class="inp" id="i-date" type="date" value="${esc(pre.date||D.today())}" required>
                 </div>
               </div>
 
@@ -1573,11 +2026,11 @@ const UI = {
                   <div class="timerow">
                     <div class="tf">
                       <label class="f" for="i-start">Start<button type="button" class="nowbtn" data-now="i-start">NOW</button></label>
-                      <input class="inp" id="i-start" type="time">
+                      <input class="inp" id="i-start" type="time" value="${esc(pre.start||"")}">
                     </div>
                     <div class="tf">
                       <label class="f" for="i-end">End<button type="button" class="nowbtn" data-now="i-end">NOW</button></label>
-                      <input class="inp" id="i-end" type="time">
+                      <input class="inp" id="i-end" type="time" value="${esc(pre.end||"")}">
                     </div>
                     <div class="calc" id="calc"><b>—</b><span>Enter a start and end time</span></div>
                   </div>
@@ -1631,7 +2084,7 @@ const UI = {
 
               <div class="mb">
                 <label class="f" for="i-notes">What did you do?</label>
-                <textarea class="inp" id="i-notes" placeholder="Replaced failed switch in server closet, re-terminated two drops, verified all 12 workstations back online. Recommended UPS replacement next visit." required></textarea>
+                <textarea class="inp" id="i-notes" placeholder="Replaced failed switch in server closet, re-terminated two drops, verified all 12 workstations back online. Recommended UPS replacement next visit." required>${esc(pre.notes||"")}</textarea>
                 <div class="hint">Write it like you'd explain it to a client six months from now.</div>
               </div>
 
@@ -1935,6 +2388,12 @@ const UI = {
         this.toast("Saved — " + client + " · " + hFmt(h) + "h · " + $m(SUB.amount(sub)) + SUB.per[sub.cycle] + " recurring");
       } else {
         this.toast("Saved — " + client + " · " + hFmt(h) + "h" + (drove ? " · " + MI.fmt(drove) + " mi" : ""));
+      }
+      /* if this came from Mark Done, close out that scheduled job */
+      if(this.pendingJob){
+        const pj = DB.liveJobs().find(x => x.id === this.pendingJob);
+        if(pj) DB.saveJob(Object.assign({}, pj, { status:"done" }));
+        this.pendingJob = null;
       }
       this.clearDraft();           /* it's in the book now — nothing left to protect */
       if(this.updateWaiting){ location.replace(location.pathname + "?b=" + this.updateWaiting); return; }
@@ -3472,7 +3931,7 @@ const UI = {
       }
       await Auth.signOut(scope);
       try{ localStorage.removeItem(KEY); localStorage.removeItem(AUTH); }catch(e){}
-      DB.s = { entries: [], clients: {}, subs: [], person: "", url: "", key: "",
+      DB.s = { entries: [], clients: {}, subs: [], jobs: [], notes: [], person: "", url: "", key: "",
                weekStart: 1, round: 0, mode: "clock", rate: 0, lock: null };
       this.signInScreen(scope==="global" ? "Signed out everywhere." : "Signed out. This device no longer holds a copy.");
     };
