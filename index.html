@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-03d">
+<meta name="build" content="2026-08-03e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -438,6 +438,37 @@ ol.steps li{margin-bottom:9px}
   .panel{border:none}
   .grp-b{display:block!important}
 }
+/* ---- clock in / out ---- */
+.clock{display:block;width:100%;border-radius:10px;border:1px solid var(--line);background:#fff;
+  text-align:left;font:inherit;overflow:hidden}
+.clock.idle{cursor:pointer;padding:20px 22px;border-style:dashed;border-width:2px;transition:.14s}
+.clock.idle:hover{border-color:var(--accent);background:#fff9f4}
+.cbig{display:block;font-size:19px;font-weight:680;color:var(--accent)}
+.csub{display:block;font-size:13px;color:var(--ink-3);margin-top:3px}
+.clock.live{border-color:#f0c3a1;background:#fff9f4;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.ctop{display:flex;align-items:center;gap:13px;padding:16px 20px}
+.cdot{width:10px;height:10px;border-radius:50%;background:var(--accent);flex:0 0 auto;
+  box-shadow:0 0 0 0 rgba(214,90,20,.5);animation:cpulse 2s infinite}
+@keyframes cpulse{
+  0%{box-shadow:0 0 0 0 rgba(214,90,20,.45)}
+  70%{box-shadow:0 0 0 11px rgba(214,90,20,0)}
+  100%{box-shadow:0 0 0 0 rgba(214,90,20,0)}
+}
+.cwho{font-weight:680;font-size:16px}
+.cwhen{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+.celapsed{font-size:25px;font-weight:680;color:var(--accent);flex:0 0 auto}
+.cbot{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;
+  padding:14px 20px;border-top:1px solid #f0dccb;background:#fffdfb}
+/* a running clock shows in the sidebar too, so leaving the screen doesn't hide it */
+#nav button.ticking .dot{background:var(--accent);animation:cpulse 2s infinite}
+#nav button.ticking::after{content:"ON SITE";margin-left:auto;font-size:9.5px;font-weight:700;
+  letter-spacing:.06em;color:var(--accent)}
+@media(max-width:860px){
+  .celapsed{font-size:21px}
+  .cbot .btn{flex:1}
+  .cbot button#cOut{margin-left:0!important;order:9}
+}
+
 /* ---- schedule ---- */
 .jday + .jday{border-top:1px solid var(--line-2)}
 .jdate{display:flex;align-items:center;gap:8px;padding:10px 18px;background:#fafbfc;
@@ -681,7 +712,7 @@ function uuid(){
 }
 
 const DB = {
-  s: { entries: [], clients: {}, subs: [], jobs: [], notes: [], person: "", url: "", key: "", weekStart: 1, round: 0, mode: "clock", rate: 0, lock: null },
+  s: { entries: [], clients: {}, subs: [], jobs: [], notes: [], clocks: [], person: "", url: "", key: "", weekStart: 1, round: 0, mode: "clock", rate: 0, lock: null },
 
   load(){
     try{ const r = localStorage.getItem(KEY); if(r) Object.assign(this.s, JSON.parse(r)); }catch(e){}
@@ -761,6 +792,7 @@ const DB = {
     (this.s.subs||[]).forEach(fix);
     (this.s.jobs||[]).forEach(fix);
     (this.s.notes||[]).forEach(fix);
+    (this.s.clocks||[]).forEach(fix);
     Object.keys(this.s.clients||{}).forEach(k => {
       const c = this.s.clients[k];
       if(c && !c.id) { c.id = k; fixed++; }      /* clients are keyed by name, not uuid */
@@ -842,6 +874,72 @@ const DB = {
     rows.forEach(r => {
       const cur = byId.get(r.id);
       if(!cur){ this.s.jobs.push(r); byId.set(r.id, r); n++; }
+      else if((r.updated_at||"") > (cur.updated_at||"")){ Object.assign(cur, r); n++; }
+    });
+    if(n) this.save();
+    return n;
+  },
+
+  /* ---- clock in / out: a job that's happening right now ---- */
+  liveClocks(){ return (this.s.clocks||[]).filter(c => !c.deleted); },
+  /* each person carries their own running clock */
+  activeClock(){
+    const me = (this.s.person||"").trim().toLowerCase();
+    return this.liveClocks().find(c => c.active &&
+      (c.person||"").trim().toLowerCase() === me) || null;
+  },
+  saveClock(c){
+    const row = Object.assign({
+      id: c.id || uuid(), active: true, deleted: false
+    }, c, { updated_at: new Date().toISOString() });
+    if(!row.id) row.id = uuid();
+    const i = this.s.clocks.findIndex(x => x.id === row.id);
+    if(i >= 0) Object.assign(this.s.clocks[i], row); else this.s.clocks.push(row);
+    this.save(); Cloud.push([row], "clocks");
+    return row;
+  },
+  clockIn(d){
+    const row = this.saveClock({
+      person: this.s.person || "", client: (d.client||"").trim(),
+      address: (d.address||"").trim(), job_date: d.date || D.today(),
+      start_time: d.start || T.now(),
+      miles_start: (d.milesStart === "" || d.milesStart == null) ? null : Number(d.milesStart),
+      rate: Number(d.rate || this.s.rate || 0), billed: d.billed || "unbilled",
+      active: true
+    });
+    if(row.client) this.saveClient({ name: row.client, address: row.address || undefined });
+    return row;
+  },
+  /* stop the clock and write the job straight into the log */
+  clockOut(id, opts){
+    const c = this.liveClocks().find(x => x.id === id);
+    if(!c) return null;
+    const end = (opts && opts.end) || T.now();
+    const mins = T.mins(c.start_time, end);
+    const hours = mins === null ? 0 : T.round(mins, this.s.round) / 60;
+    const entry = this.add({
+      client: c.client, date: c.job_date, hours,
+      notes: (opts && opts.notes) || "",
+      start: c.start_time, end,
+      address: c.address,
+      milesStart: c.miles_start == null ? "" : c.miles_start,
+      milesEnd: (opts && opts.milesEnd !== "" && opts.milesEnd != null) ? Number(opts.milesEnd) : "",
+      billed: c.billed, rate: c.rate, subId: null
+    });
+    this.saveClock(Object.assign({}, c, { active: false }));
+    return entry;
+  },
+  cancelClock(id){
+    const c = this.liveClocks().find(x => x.id === id);
+    if(!c) return;
+    this.saveClock(Object.assign({}, c, { active:false, deleted:true }));
+  },
+  mergeClocks(rows){
+    let n = 0;
+    const byId = new Map((this.s.clocks||[]).map(x => [x.id, x]));
+    rows.forEach(r => {
+      const cur = byId.get(r.id);
+      if(!cur){ this.s.clocks.push(r); byId.set(r.id, r); n++; }
       else if((r.updated_at||"") > (cur.updated_at||"")){ Object.assign(cur, r); n++; }
     });
     if(n) this.save();
@@ -1063,6 +1161,18 @@ const Cloud = {
         }))))
         .catch(()=>{});
 
+      /* an in-progress clock, so it follows you between phone and laptop */
+      fetch(this.base("clocks")+"?select=*", { headers: this.head() })
+        .then(res => res.ok ? res.json() : [])
+        .then(cs => DB.mergeClocks(cs.map(c => ({
+          id:c.id, person:c.person||"", client:c.client||"", address:c.address||"",
+          job_date:c.job_date||"", start_time:c.start_time||"",
+          miles_start:c.miles_start==null?null:Number(c.miles_start),
+          rate:Number(c.rate||0), billed:c.billed||"unbilled", active:c.active!==false,
+          updated_at:c.updated_at||"", deleted:!!c.deleted
+        }))))
+        .catch(()=>{});
+
       /* shared notes */
       fetch(this.base("notes")+"?select=*", { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
@@ -1119,6 +1229,12 @@ const Cloud = {
       id:r.id, job_date:this.dt(r.job_date), start_time:r.start_time||"", end_time:r.end_time||"",
       client:r.client||"", address:r.address||"", what:r.what||"", person:r.person||"",
       status:r.status||"planned", entry_id:r.entry_id||null,
+      updated_at:r.updated_at||now, deleted:!!r.deleted };
+    if(table === "clocks") return {
+      id:r.id, person:r.person||"", client:r.client||"", address:r.address||"",
+      job_date:this.dt(r.job_date), start_time:r.start_time||"",
+      miles_start:(r.miles_start===""||r.miles_start==null)?null:this.num(r.miles_start,null),
+      rate:this.num(r.rate,0), billed:r.billed||"unbilled", active:r.active!==false,
       updated_at:r.updated_at||now, deleted:!!r.deleted };
     if(table === "notes") return {
       id:r.id, title:r.title||"", body:r.body||"", pinned:!!r.pinned, author:r.author||"",
@@ -1210,8 +1326,9 @@ const Cloud = {
     const c = await this.push(DB.s.subs, "subs");
     const d = await this.push(DB.s.jobs, "jobs");
     const e = await this.push(DB.s.notes, "notes");
-    if(a && b && c && d && e) this.clearAlarm();
-    return a && b && c && d && e;
+    const f = await this.push(DB.s.clocks, "clocks");
+    if(a && b && c && d && e && f) this.clearAlarm();
+    return a && b && c && d && e && f;
   },
   async test(url, key){
     const r = await fetch(url.replace(/\/+$/,"")+"/rest/v1/entries?select=id&limit=1", {
@@ -1566,6 +1683,7 @@ const UI = {
   go(v){
     this.view = v;
     document.querySelectorAll("#nav button, #mobnav button").forEach(b => b.classList.toggle("on", b.dataset.v===v));
+    this.paintClockFlag();
     this.render();
     window.scrollTo(0,0);
   },
@@ -1591,6 +1709,7 @@ const UI = {
 
   render(){
     const v = document.getElementById("view");
+    this.paintClockFlag();
     if(this.view==="log")  { this.head("New Entry","Log where you were and what you did."); v.innerHTML = this.vLog(); this.wireLog(); }
     if(this.view==="week") { this.vWeek(v); }
     if(this.view==="cal")    { this.vCal(v); }
@@ -1600,6 +1719,78 @@ const UI = {
     if(this.view==="sched"){ this.vSched(v); }
     if(this.view==="notes"){ this.vNotes(v); }
     if(this.view==="set")  { this.head("Settings","Your name, and shared access for the crew."); v.innerHTML = this.vSet(); this.wireSet(); }
+  },
+
+  /* the sidebar carries a marker while the clock runs */
+  paintClockFlag(){
+    const on = !!DB.activeClock();
+    document.querySelectorAll('#nav button[data-v="log"]').forEach(b => b.classList.toggle("ticking", on));
+  },
+
+  /* ---------- CLOCK IN ---------- */
+  clockInDialog(){
+    const cl = DB.clientList().map(c=>c.name);
+    const last = DB.lastOdometer();
+    const todays = DB.liveJobs().filter(j => j.job_date === D.today() && j.status !== "done");
+
+    this.modal("Clock In",
+      `${todays.length ? `
+       <div class="mb">
+         <label class="f">On the schedule today</label>
+         <div class="chips">
+           ${todays.map(j=>`<button type="button" class="chip" data-pick="${j.id}">${esc(j.client)}${j.start_time?" · "+esc(T.label(j.start_time)):""}</button>`).join("")}
+         </div>
+       </div>` : ""}
+
+       <div class="mb"><label class="f" for="k-client">Where are you?</label>
+         <input class="inp" id="k-client" list="kcl" autocomplete="off" placeholder="Client or location" value="">
+         <datalist id="kcl">${cl.map(c=>`<option value="${esc(c)}">`).join("")}</datalist></div>
+
+       <div class="mb"><label class="f" for="k-addr">Address</label>
+         <input class="inp" id="k-addr" autocomplete="off" placeholder="Fills in from the client record"></div>
+
+       <div class="mb">
+         <div class="timerow">
+           <div class="tf"><label class="f" for="k-start" style="font-size:11px">Arrived at</label>
+             <input class="inp" id="k-start" type="time" value="${esc(T.now())}" style="width:132px"></div>
+           <div class="tf"><label class="f" for="k-miles" style="font-size:11px">Odometer${last!=null?` <button type="button" class="nowbtn" id="kLast">LAST ${esc(MI.fmt(last))}</button>`:""}</label>
+             <input class="inp tnum" id="k-miles" type="number" step="0.1" min="0" inputmode="decimal" placeholder="optional" style="width:150px"></div>
+           <div class="tf"><label class="f" for="k-rate" style="font-size:11px">Rate / hr</label>
+             <input class="inp tnum" id="k-rate" type="number" step="1" min="0" value="${DB.s.rate||""}" placeholder="0" style="width:120px"></div>
+         </div>
+         <div class="hint">Arrival time defaults to now — change it if you're logging late.</div>
+       </div>`,
+      `<button class="btn" onclick="UI.closeModal()">Cancel</button>
+       <button class="btn accent" id="kGo">Start the Clock</button>`);
+
+    const $ = i => document.getElementById(i);
+    $("k-client").addEventListener("change", ()=>{
+      const rec = DB.getClient($("k-client").value);
+      if(rec && rec.address && !$("k-addr").value) $("k-addr").value = rec.address;
+    });
+    if($("kLast")) $("kLast").onclick = ()=>{ $("k-miles").value = last; };
+    document.querySelectorAll("[data-pick]").forEach(b => b.onclick = ()=>{
+      const j = DB.liveJobs().find(x => x.id === b.dataset.pick);
+      if(!j) return;
+      $("k-client").value = j.client;
+      if(j.address) $("k-addr").value = j.address;
+      document.querySelectorAll("[data-pick]").forEach(x=>x.classList.toggle("on", x===b));
+    });
+
+    $("kGo").onclick = ()=>{
+      const client = $("k-client").value.trim();
+      if(!client){ this.toast("Where are you?"); $("k-client").focus(); return; }
+      DB.clockIn({
+        client, address: $("k-addr").value.trim(),
+        start: $("k-start").value || T.now(),
+        milesStart: $("k-miles").value,
+        rate: Number($("k-rate").value || 0)
+      });
+      this.closeModal();
+      this.toast("Clocked in at " + client);
+      this.render();
+    };
+    setTimeout(()=>{ const c=$("k-client"); if(c) c.focus(); }, 60);
   },
 
   /* ---------- SCHEDULE ---------- */
@@ -1985,9 +2176,36 @@ const UI = {
     const pre = this.prefill || {};
     this.prefill = null;
     const recent = DB.live().slice().sort((a,b)=> (b.updated_at||"").localeCompare(a.updated_at||"")).slice(0,5);
+    const run = DB.activeClock();
     return `
     <div class="row" style="align-items:flex-start">
       <div class="col" style="flex:2;min-width:320px">
+
+        ${run ? `
+        <div class="clock live mb">
+          <div class="ctop">
+            <span class="cdot"></span>
+            <div style="flex:1;min-width:0">
+              <div class="cwho">On site at ${esc(run.client||"—")}</div>
+              <div class="cwhen">Since ${esc(T.label(run.start_time))}${run.address?" · "+esc(run.address):""}${run.miles_start!=null?" · in at "+esc(MI.fmt(run.miles_start))+" mi":""}</div>
+            </div>
+            <div class="celapsed tnum" id="cElapsed">—</div>
+          </div>
+          <div class="cbot">
+            <div class="tf"><label class="f" for="c-end" style="font-size:11px">Finished at</label>
+              <input class="inp" id="c-end" type="time" value="${esc(T.now())}" style="width:130px"></div>
+            <div class="tf"><label class="f" for="c-mend" style="font-size:11px">Miles now</label>
+              <input class="inp tnum" id="c-mend" type="number" step="0.1" min="0" inputmode="decimal"
+                     placeholder="${run.miles_start!=null?esc(String(run.miles_start)):"optional"}" style="width:130px"></div>
+            <button class="btn accent" id="cOut" style="margin-left:auto">Clock Out &amp; Save</button>
+            <button class="btn ghost sm" id="cCancel">Discard</button>
+          </div>
+        </div>` : `
+        <button class="clock idle mb" id="cIn">
+          <span class="cbig">Clock In</span>
+          <span class="csub">Start the timer when you get there — log the details when you leave</span>
+        </button>`}
+
         <div class="panel">
           <div class="panel-h"><h2>Job Details</h2><span class="hint" style="margin:0">${esc(D.full(D.today()))}</span></div>
           <div class="panel-b">
@@ -2438,6 +2656,48 @@ const UI = {
       form.parentNode.insertBefore(bar, form);
       document.getElementById("dropDraft").onclick = ()=>{
         this.clearDraft(); this.render(); this.toast("Cleared");
+      };
+    }
+
+    /* ---- the running clock ---- */
+    const clockBtn = document.getElementById("cIn");
+    if(clockBtn) clockBtn.onclick = ()=> this.clockInDialog();
+
+    const running = DB.activeClock();
+    clearInterval(this._clockTimer);
+    if(running){
+      const el = document.getElementById("cElapsed");
+      const tick = () => {
+        const box = document.getElementById("cElapsed");
+        if(!box){ clearInterval(this._clockTimer); return; }
+        const m = T.mins(running.start_time, T.now());
+        box.textContent = m === null ? "—" : T.span(m);
+      };
+      tick();
+      this._clockTimer = setInterval(tick, 20000);   /* minutes only — no need to burn a tick a second */
+
+      document.getElementById("cOut").onclick = ()=>{
+        const end = document.getElementById("c-end").value || T.now();
+        const mEnd = document.getElementById("c-mend").value;
+        const mins = T.mins(running.start_time, end);
+        if(mins === null){ this.toast("Need a finish time"); return; }
+        if(mins === 0){ this.toast("That's the same as your start time"); return; }
+        if(mEnd !== "" && running.miles_start != null && Number(mEnd) < running.miles_start){
+          this.toast("Ending miles are below where you started"); return;
+        }
+        const made = DB.clockOut(running.id, { end, milesEnd: mEnd });
+        clearInterval(this._clockTimer);
+        this.render();
+        const hrs = hFmt(Number(made.hours));
+        this.toast("Logged " + hrs + "h at " + made.client + " — add what you did");
+        /* saved already, but open it so the notes don't get forgotten */
+        setTimeout(()=> this.editEntry(made.id), 250);
+      };
+      document.getElementById("cCancel").onclick = ()=>{
+        if(!confirm("Discard this clock-in?\n\nNothing will be logged.")) return;
+        DB.cancelClock(running.id);
+        clearInterval(this._clockTimer);
+        this.toast("Discarded"); this.render();
       };
     }
 
@@ -3938,7 +4198,7 @@ const UI = {
       }
       await Auth.signOut(scope);
       try{ localStorage.removeItem(KEY); localStorage.removeItem(AUTH); }catch(e){}
-      DB.s = { entries: [], clients: {}, subs: [], jobs: [], notes: [], person: "", url: "", key: "",
+      DB.s = { entries: [], clients: {}, subs: [], jobs: [], notes: [], clocks: [], person: "", url: "", key: "",
                weekStart: 1, round: 0, mode: "clock", rate: 0, lock: null };
       this.signInScreen(scope==="global" ? "Signed out everywhere." : "Signed out. This device no longer holds a copy.");
     };
