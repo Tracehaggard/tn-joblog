@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-03e">
+<meta name="build" content="2026-08-09a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -1131,6 +1131,20 @@ const Cloud = {
       "Content-Type": "application/json"
     }, extra||{});
   },
+  /* A request with no timeout can hang forever: it never resolves and never
+     rejects, so the app sits there claiming "Synced" while nothing moves.
+     Every call gets a deadline so a stall is reported like any other failure. */
+  TIMEOUT: 20000,
+  async go(url, opts, ms){
+    const ac = new AbortController();
+    const t = setTimeout(()=> ac.abort(), ms || this.TIMEOUT);
+    try{
+      return await fetch(url, Object.assign({}, opts||{}, { signal: ac.signal }));
+    }catch(err){
+      if(err && err.name === "AbortError") throw new Error("No response from the server — check the connection");
+      throw err;
+    }finally{ clearTimeout(t); }
+  },
   setState(s, msg){
     this.state = s;
     const d = document.getElementById("syncDot"), t = document.getElementById("syncTxt");
@@ -1142,7 +1156,7 @@ const Cloud = {
     if(!DB.linked()) { this.setState("off"); return 0; }
     try{
       /* client records ride along, quietly */
-      fetch(this.base("clients")+"?select=*", { headers: this.head() })
+      this.go(this.base("clients")+"?select=*", { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
         .then(cs => DB.mergeClients(cs.map(c => ({
           id:c.id, name:c.name, address:c.address||"", phone:c.phone||"",
@@ -1151,7 +1165,7 @@ const Cloud = {
         .catch(()=>{});
 
       /* the week ahead */
-      fetch(this.base("jobs")+"?select=*", { headers: this.head() })
+      this.go(this.base("jobs")+"?select=*", { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
         .then(js => DB.mergeJobs(js.map(j => ({
           id:j.id, job_date:j.job_date||"", start_time:j.start_time||"", end_time:j.end_time||"",
@@ -1162,7 +1176,7 @@ const Cloud = {
         .catch(()=>{});
 
       /* an in-progress clock, so it follows you between phone and laptop */
-      fetch(this.base("clocks")+"?select=*", { headers: this.head() })
+      this.go(this.base("clocks")+"?select=*", { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
         .then(cs => DB.mergeClocks(cs.map(c => ({
           id:c.id, person:c.person||"", client:c.client||"", address:c.address||"",
@@ -1174,7 +1188,7 @@ const Cloud = {
         .catch(()=>{});
 
       /* shared notes */
-      fetch(this.base("notes")+"?select=*", { headers: this.head() })
+      this.go(this.base("notes")+"?select=*", { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
         .then(ns => DB.mergeNotes(ns.map(n => ({
           id:n.id, title:n.title||"", body:n.body||"", pinned:!!n.pinned, author:n.author||"",
@@ -1183,17 +1197,18 @@ const Cloud = {
         .catch(()=>{});
 
       /* recurring subscriptions too */
-      fetch(this.base("subs")+"?select=*", { headers: this.head() })
+      this.go(this.base("subs")+"?select=*", { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
         .then(ss => DB.mergeSubs(ss.map(s => ({
           id:s.id, client:s.client, item:s.item||"", qty:Number(s.qty||1),
           unit_price:Number(s.unit_price||0), unit_cost:Number(s.unit_cost||0), cycle:s.cycle||"monthly",
           next_due:s.next_due||"", last_billed:s.last_billed||"", note:s.note||"",
+          start_date:s.start_date||"", term:s.term||"", ext_id:s.ext_id||"",
           active:s.active!==false, updated_at:s.updated_at||"", deleted:!!s.deleted
         }))))
         .catch(()=>{});
 
-      const r = await fetch(this.base()+"?select=*", { headers: this.head() });
+      const r = await this.go(this.base()+"?select=*", { headers: this.head() });
       if(!r.ok) throw new Error(await r.text());
       const rows = await r.json();
       const n = DB.merge(rows.map(x => ({
@@ -1208,9 +1223,16 @@ const Cloud = {
         invoice_no: x.invoice_no||"",
         updated_at:x.updated_at||"", deleted:!!x.deleted
       })));
+      this.lastPull = Date.now();
       this.setState("ok", "Synced · " + new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}));
+      this.clearOffline();
       return n;
-    }catch(err){ this.setState("err", "Sync error"); console.warn("pull", err); return 0; }
+    }catch(err){
+      this.setState("err", "Can't reach the server");
+      console.warn("pull", err);
+      this.offline(err && err.message ? err.message : String(err));
+      return 0;
+    }
   },
   /* Every row in a batch must carry exactly the same keys or PostgREST
      rejects the whole batch, and Postgres date columns reject "".
@@ -1243,6 +1265,7 @@ const Cloud = {
       id:r.id, client:r.client||"", item:r.item||"",
       qty:this.num(r.qty,1), unit_price:this.num(r.unit_price,0), unit_cost:this.num(r.unit_cost,0),
       cycle:r.cycle||"monthly", next_due:this.dt(r.next_due), last_billed:this.dt(r.last_billed),
+      start_date:this.dt(r.start_date), term:r.term||"", ext_id:r.ext_id||"",
       note:r.note||"", active:r.active!==false,
       updated_at:r.updated_at||now, deleted:!!r.deleted };
     return {
@@ -1258,7 +1281,7 @@ const Cloud = {
   },
   clean(rows, table){ return rows.map(r => this.shape(r, table)); },
   async send(rows, table){
-    const r = await fetch(this.base(table), {
+    const r = await this.go(this.base(table), {
       method:"POST",
       headers: this.head({ "Prefer":"resolution=merge-duplicates,return=minimal" }),
       body: JSON.stringify(this.clean(rows, table))
@@ -1320,6 +1343,28 @@ const Cloud = {
     document.getElementById("syncHide").onclick = ()=> b.remove();
   },
   clearAlarm(){ const b=document.getElementById("syncAlarm"); if(b) b.remove(); },
+
+  /* the server is unreachable — different problem from a rejected record */
+  offline(msg){
+    let b = document.getElementById("syncOffline");
+    if(!b){
+      b = document.createElement("div");
+      b.id = "syncOffline";
+      b.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:88;background:#92400e;color:#fff;"+
+        "padding:10px 16px;font-size:13.5px;display:flex;align-items:center;gap:12px;"+
+        "box-shadow:0 2px 12px rgba(0,0,0,.2)";
+      document.body.appendChild(b);
+    }
+    const mins = this.lastPull ? Math.round((Date.now()-this.lastPull)/60000) : null;
+    b.innerHTML = `<div style="flex:1"><b>Working offline.</b>
+        <span style="opacity:.9">Can't reach the database${mins!=null?" — last synced "+(mins<1?"just now":mins+" min ago"):""}.
+        Your work is saved on this device and will upload when the connection returns.</span></div>
+      <button class="btn sm" id="offRetry" style="background:#fff;border-color:#fff;color:#92400e">Retry</button>
+      <button class="btn sm" id="offHide" style="background:transparent;border-color:rgba(255,255,255,.5);color:#fff">Hide</button>`;
+    document.getElementById("offRetry").onclick = async ()=>{ await Cloud.pull(); await Cloud.pushAll(); };
+    document.getElementById("offHide").onclick = ()=> b.remove();
+  },
+  clearOffline(){ const b=document.getElementById("syncOffline"); if(b) b.remove(); },
   async pushAll(){
     const a = await this.push(DB.s.entries);
     const b = await this.push(Object.values(DB.s.clients), "clients");
@@ -1450,6 +1495,114 @@ const INV = {
 };
 
 /* recurring subscriptions */
+/* ---------- CSV import ----------
+   Vendor exports never agree on column names, so parse whatever arrives
+   and match headers by meaning rather than expecting an exact layout. */
+const CSV = {
+  /* a real parser: quoted fields, embedded commas and newlines, "" escapes */
+  parse(text){
+    const rows = [];
+    let row = [], field = "", q = false;
+    const s = String(text).replace(/^﻿/, "");   /* Excel's byte-order mark */
+    for(let i = 0; i < s.length; i++){
+      const c = s[i];
+      if(q){
+        if(c === '"'){
+          if(s[i+1] === '"'){ field += '"'; i++; }
+          else q = false;
+        } else field += c;
+      } else {
+        if(c === '"') q = true;
+        else if(c === ","){ row.push(field); field = ""; }
+        else if(c === "\r"){ /* ignore */ }
+        else if(c === "\n"){ row.push(field); rows.push(row); row = []; field = ""; }
+        else field += c;
+      }
+    }
+    if(field.length || row.length){ row.push(field); rows.push(row); }
+    return rows.filter(r => r.some(x => String(x).trim() !== ""));
+  },
+
+  norm(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9]/g, ""); },
+
+  /* what we're looking for, in rough priority order per field */
+  wants: {
+    item:    ["subscriptionname","productname","offername","subscription","product","offer","skuname","name","description"],
+    qty:     ["quantity","seats","licenses","licensequantity","units","qty"],
+    start:   ["startdate","subscriptionstartdate","effectivestartdate","commitmentstartdate","created"],
+    renew:   ["renewaldate","nextrenewaldate","expirationdate","enddate","commitmentenddate","nextbillingdate","expiry"],
+    term:    ["subscriptionperiod","term","termduration","commitmentterm","subscriptionterm","duration"],
+    cycle:   ["billingperiod","billingcycle","billingfrequency","billingplan","frequency"],
+    client:  ["customername","customer","companyname","company","tenantname","account","accountname","organization"],
+    price:   ["unitprice","sellprice","customerprice","listprice","priceperunit","retailprice","msrp"],
+    cost:    ["unitcost","cost","partnerprice","buyprice","yourcost","wholesale"],
+    ext:     ["subscriptionid","id","offerid","orderid","externalid"]
+  },
+
+  /* score each header against what we want; best match wins, ties go left */
+  detect(headers){
+    const map = {};
+    const used = new Set();
+    Object.keys(this.wants).forEach(key => {
+      let best = -1, bestScore = 0;
+      headers.forEach((raw, i) => {
+        if(used.has(i)) return;
+        const hn = this.norm(raw);
+        if(!hn) return;
+        let score = 0;
+        this.wants[key].forEach((w, rank) => {
+          const weight = this.wants[key].length - rank;
+          if(hn === w) score = Math.max(score, 100 + weight);
+          else if(hn.includes(w) || w.includes(hn)) score = Math.max(score, 40 + weight);
+        });
+        if(score > bestScore){ bestScore = score; best = i; }
+      });
+      if(best >= 0 && bestScore >= 40){ map[key] = best; used.add(best); }
+    });
+    return map;
+  },
+
+  /* dates arrive as ISO, US, or with a time attached */
+  date(v){
+    const s = String(v||"").trim();
+    if(!s) return "";
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if(m) return m[1]+"-"+m[2]+"-"+m[3];
+    m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+    if(m){
+      let [_, a, b, y] = m;
+      if(y.length === 2) y = "20"+y;
+      return y+"-"+String(a).padStart(2,"0")+"-"+String(b).padStart(2,"0");   /* US month-first */
+    }
+    const d = new Date(s);
+    return isNaN(d) ? "" : D.iso(d);
+  },
+
+  /* "P1M", "Annual", "Every 3 months" → the cycle we bill on */
+  cycle(v){
+    const s = String(v||"").toLowerCase().trim();
+    if(!s) return "";
+    if(/p1m|^1 month|monthly|month/.test(s)) return "monthly";
+    if(/p3m|quarter|3 month/.test(s)) return "quarterly";
+    if(/p1y|annual|yearly|year|12 month/.test(s)) return "annual";
+    if(/onetime|one-time|one time/.test(s)) return "annual";
+    return "";
+  },
+
+  /* keep the raw term readable: "P1Y" reads as nothing to a human */
+  term(v){
+    const s = String(v||"").trim();
+    if(!s) return "";
+    const map = { p1m:"1 month", p3m:"3 months", p1y:"1 year", p2y:"2 years", p3y:"3 years" };
+    return map[s.toLowerCase()] || s;
+  },
+
+  num(v){
+    const n = Number(String(v||"").replace(/[^0-9.\-]/g, ""));
+    return isNaN(n) ? 0 : n;
+  }
+};
+
 const SUB = {
   cycles: { monthly:1, quarterly:3, annual:12 },
   label:  { monthly:"Monthly", quarterly:"Quarterly", annual:"Annual" },
@@ -1725,6 +1878,165 @@ const UI = {
   paintClockFlag(){
     const on = !!DB.activeClock();
     document.querySelectorAll('#nav button[data-v="log"]').forEach(b => b.classList.toggle("ticking", on));
+  },
+
+  /* ---------- IMPORT SUBSCRIPTIONS FROM CSV ---------- */
+  importCSV(){
+    const cl = DB.clientList().map(c=>c.name);
+    this.modal("Import Subscriptions",
+      `<div id="imp1">
+         <div class="mb"><label class="f">1 · Choose the CSV your dad exported</label>
+           <input type="file" id="csvFile" accept=".csv,text/csv" class="inp" style="padding:11px">
+           <div class="hint">Or paste the contents below if it's easier on a phone.</div>
+         </div>
+         <div class="mb"><label class="f" for="csvText">Paste CSV</label>
+           <textarea class="inp" id="csvText" placeholder="Subscription Name,Start Date,Renewal Date,..." style="min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px"></textarea></div>
+         <div class="mb"><label class="f" for="impClient">2 · Which company are these for?</label>
+           <input class="inp" id="impClient" list="impcl" autocomplete="off" placeholder="Type or pick the client">
+           <datalist id="impcl">${cl.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>
+           <div class="hint">Leave blank if the file has a customer column — I'll use that instead.</div></div>
+       </div>
+       <div id="imp2"></div>`,
+      `<button class="btn" onclick="UI.closeModal()">Cancel</button>
+       <button class="btn accent" id="impRead">Read the File</button>`);
+
+    const $ = i => document.getElementById(i);
+    $("csvFile").addEventListener("change", ()=>{
+      const f = $("csvFile").files[0];
+      if(!f) return;
+      const rd = new FileReader();
+      rd.onload = ()=> { $("csvText").value = rd.result; this.toast("Loaded " + f.name); };
+      rd.readAsText(f);
+    });
+    $("impRead").onclick = ()=> this.importMap($("csvText").value, $("impClient").value.trim());
+    setTimeout(()=>{ const c=$("impClient"); if(c) c.focus(); }, 60);
+  },
+
+  importMap(text, clientName){
+    const rows = CSV.parse(text);
+    if(rows.length < 2){ this.toast("Need a header row and at least one subscription"); return; }
+    const headers = rows[0].map(x=>String(x).trim());
+    const body = rows.slice(1);
+    const guess = CSV.detect(headers);
+
+    const sel = (key, label, need) => `
+      <div class="tf" style="min-width:180px;flex:1">
+        <label class="f" style="font-size:11px">${label}${need?` <span style="color:var(--accent)">*</span>`:""}</label>
+        <select class="inp" data-map="${key}">
+          <option value="">— not in file —</option>
+          ${headers.map((h,i)=>`<option value="${i}"${guess[key]===i?" selected":""}>${esc(h||("Column "+(i+1)))}</option>`).join("")}
+        </select>
+      </div>`;
+
+    const found = Object.keys(guess).length;
+    this.modal("Import Subscriptions · Check the Columns",
+      `<div class="mb" style="background:#ecfdf3;border:1px solid #a7e0c0;color:#065f36;border-radius:8px;padding:11px 14px;font-size:13.5px">
+         Read <b>${body.length}</b> row${body.length===1?"":"s"} and matched <b>${found}</b> column${found===1?"":"s"} automatically. Change anything I got wrong.
+       </div>
+       <div class="mb"><div class="timerow" style="flex-wrap:wrap">
+         ${sel("item","Subscription Name",true)}
+         ${sel("qty","Quantity")}
+         ${sel("cycle","Billing Period")}
+       </div></div>
+       <div class="mb"><div class="timerow" style="flex-wrap:wrap">
+         ${sel("start","Start Date")}
+         ${sel("renew","Renewal Date")}
+         ${sel("term","Subscription Period")}
+       </div></div>
+       <div class="mb"><div class="timerow" style="flex-wrap:wrap">
+         ${sel("client","Customer (if in file)")}
+         ${sel("price","Price (optional)")}
+         ${sel("cost","Our Cost (optional)")}
+       </div></div>
+       <div id="impPrev"></div>`,
+      `<button class="btn" onclick="UI.closeModal()">Cancel</button>
+       <button class="btn accent" id="impGo">Preview</button>`);
+
+    const build = () => {
+      const map = {};
+      document.querySelectorAll("[data-map]").forEach(s=>{
+        if(s.value !== "") map[s.dataset.map] = Number(s.value);
+      });
+      const cell = (r, k) => map[k] == null ? "" : (r[map[k]] || "");
+      return body.map(r => {
+        const client = (cell(r,"client") || clientName || "").trim();
+        const item = String(cell(r,"item")||"").trim();
+        const renew = CSV.date(cell(r,"renew"));
+        const start = CSV.date(cell(r,"start"));
+        const cyc = CSV.cycle(cell(r,"cycle")) || CSV.cycle(cell(r,"term")) || "annual";
+        const qty = map.qty == null ? 1 : (CSV.num(cell(r,"qty")) || 1);
+        const existing = client && item
+          ? DB.liveSubs().find(s => s.client.trim().toLowerCase() === client.toLowerCase()
+                                 && (s.item||"").trim().toLowerCase() === item.toLowerCase())
+          : null;
+        return {
+          client, item, qty,
+          unit_price: map.price == null ? (existing ? existing.unit_price : 0) : CSV.num(cell(r,"price")),
+          unit_cost:  map.cost  == null ? (existing ? existing.unit_cost  : 0) : CSV.num(cell(r,"cost")),
+          cycle: cyc, next_due: renew, start_date: start,
+          term: CSV.term(cell(r,"term")), ext_id: "",
+          existing, ok: !!(client && item)
+        };
+      });
+    };
+
+    document.getElementById("impGo").onclick = ()=>{
+      const list = build();
+      const good = list.filter(r=>r.ok);
+      const bad  = list.length - good.length;
+      const isNew = good.filter(r=>!r.existing).length;
+      const upd   = good.length - isNew;
+      const unpriced = good.filter(r=>!r.unit_price).length;
+
+      document.getElementById("impPrev").innerHTML = `
+        <div class="mb" style="border:1px solid var(--line);border-radius:8px;overflow:hidden">
+          <div style="padding:11px 14px;background:#fafbfc;border-bottom:1px solid var(--line-2);font-size:13.5px">
+            <b>${isNew} new</b>${upd?` · <b>${upd} will update</b>`:""}${bad?` · <span style="color:#b42318">${bad} skipped (no name or client)</span>`:""}
+            ${unpriced?`<div class="hint" style="margin:4px 0 0">${unpriced} have no price yet — set them in Recurring after.</div>`:""}
+          </div>
+          <div style="max-height:260px;overflow:auto">
+            <table class="cmp" style="font-size:12.5px">
+              <thead><tr><th>Subscription</th><th>Qty</th><th>Cycle</th><th>Renews</th><th></th></tr></thead>
+              <tbody>
+                ${good.slice(0,60).map(r=>`<tr>
+                  <th style="font-weight:600">${esc(r.item)}<div style="font-weight:400;color:var(--ink-3);font-size:11.5px">${esc(r.client)}</div></th>
+                  <td class="tnum">${r.qty}</td>
+                  <td>${esc(SUB.label[r.cycle]||r.cycle)}</td>
+                  <td>${r.next_due?esc(D.due(r.next_due)):"—"}</td>
+                  <td><span class="pill ${r.existing?"partial":"billed"}">${r.existing?"Update":"New"}</span></td>
+                </tr>`).join("")}
+              </tbody>
+            </table>
+            ${good.length>60?`<div class="hint" style="padding:8px 14px">…and ${good.length-60} more</div>`:""}
+          </div>
+        </div>`;
+
+      const foot = document.getElementById("mFoot");
+      foot.innerHTML = `<button class="btn" onclick="UI.closeModal()">Cancel</button>
+        <button class="btn accent" id="impSave">Import ${good.length} Subscription${good.length===1?"":"s"}</button>`;
+      document.getElementById("impSave").onclick = ()=>{
+        let added = 0, updated = 0;
+        good.forEach(r => {
+          DB.saveSub({
+            id: r.existing ? r.existing.id : undefined,
+            client: r.client, item: r.item, qty: r.qty,
+            unit_price: r.unit_price, unit_cost: r.unit_cost,
+            cycle: r.cycle,
+            next_due: r.next_due || (r.existing ? r.existing.next_due : ""),
+            start_date: r.start_date || "",
+            term: r.term || "",
+            last_billed: r.existing ? r.existing.last_billed : "",
+            note: r.existing ? r.existing.note : "",
+            active: true
+          });
+          r.existing ? updated++ : added++;
+        });
+        this.closeModal();
+        this.toast("Imported " + added + " new" + (updated?" · updated "+updated:""));
+        this.go("subs");
+      };
+    };
+    document.getElementById("impGo").click();   /* show the preview straight away */
   },
 
   /* ---------- CLOCK IN ---------- */
@@ -3391,7 +3703,8 @@ const UI = {
     const dueValue = dueSoon.reduce((t,s)=> t + SUB.amount(s), 0);
 
     this.head("Recurring", active.length + " active · " + $r(mrr) + "/mo billed · " + $r(mprofit) + "/mo profit",
-      `<button class="btn dark" id="sbNew">+ Add Subscription</button>`);
+      `<button class="btn" id="sbImport">Import CSV</button>
+       <button class="btn dark" id="sbNew">+ Add Subscription</button>`);
 
     let list = all.slice();
     if(this.subFilter === "due")    list = list.filter(s => s.active && SUB.daysUntil(s.next_due) <= 14);
@@ -3477,6 +3790,7 @@ const UI = {
       </div>`;
 
     document.getElementById("sbNew").onclick = ()=> this.editSub(null);
+    document.getElementById("sbImport").onclick = ()=> this.importCSV();
     v.querySelectorAll("#subSeg button").forEach(b => b.onclick = ()=>{ this.subFilter = b.dataset.s; this.render(); });
     v.querySelectorAll("[data-editsub]").forEach(b => b.onclick = ()=> this.editSub(b.dataset.editsub));
     v.querySelectorAll("[data-billsub]").forEach(b => b.onclick = ()=> this.billSub(b.dataset.billsub));
