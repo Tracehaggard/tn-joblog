@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-09a">
+<meta name="build" content="2026-08-09b">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -1152,65 +1152,70 @@ const Cloud = {
     d.className = "syncdot" + (s==="ok" ? " live" : s==="err" ? " err" : "");
     t.textContent = msg || (s==="ok" ? "Synced" : s==="err" ? "Sync error" : "Local only");
   },
-  async pull(){
+  async pull(full){
     if(!DB.linked()) { this.setState("off"); return 0; }
+    /* sweep everything every 20th pull (~50 min) as a safety net */
+    this.pulls = (this.pulls || 0) + 1;
+    if(this.pulls % 20 === 1) full = true;
     try{
+
       /* client records ride along, quietly */
-      this.go(this.base("clients")+"?select=*", { headers: this.head() })
+      this.go(this.q("clients", full), { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
-        .then(cs => DB.mergeClients(cs.map(c => ({
+        .then(cs => { Cloud.mark("clients", cs); return DB.mergeClients(cs.map(c => ({
           id:c.id, name:c.name, address:c.address||"", phone:c.phone||"",
           contact:c.contact||"", note:c.note||"", updated_at:c.updated_at||"", deleted:!!c.deleted
-        }))))
+        }))); })
         .catch(()=>{});
 
       /* the week ahead */
-      this.go(this.base("jobs")+"?select=*", { headers: this.head() })
+      this.go(this.q("jobs", full), { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
-        .then(js => DB.mergeJobs(js.map(j => ({
+        .then(js => { Cloud.mark("jobs", js); return DB.mergeJobs(js.map(j => ({
           id:j.id, job_date:j.job_date||"", start_time:j.start_time||"", end_time:j.end_time||"",
           client:j.client||"", address:j.address||"", what:j.what||"", person:j.person||"",
           status:j.status||"planned", entry_id:j.entry_id||null,
           updated_at:j.updated_at||"", deleted:!!j.deleted
-        }))))
+        }))); })
         .catch(()=>{});
 
       /* an in-progress clock, so it follows you between phone and laptop */
-      this.go(this.base("clocks")+"?select=*", { headers: this.head() })
+      this.go(this.q("clocks", full), { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
-        .then(cs => DB.mergeClocks(cs.map(c => ({
+        .then(cs => { Cloud.mark("clocks", cs); return DB.mergeClocks(cs.map(c => ({
           id:c.id, person:c.person||"", client:c.client||"", address:c.address||"",
           job_date:c.job_date||"", start_time:c.start_time||"",
           miles_start:c.miles_start==null?null:Number(c.miles_start),
           rate:Number(c.rate||0), billed:c.billed||"unbilled", active:c.active!==false,
           updated_at:c.updated_at||"", deleted:!!c.deleted
-        }))))
+        }))); })
         .catch(()=>{});
 
       /* shared notes */
-      this.go(this.base("notes")+"?select=*", { headers: this.head() })
+      this.go(this.q("notes", full), { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
-        .then(ns => DB.mergeNotes(ns.map(n => ({
+        .then(ns => { Cloud.mark("notes", ns); return DB.mergeNotes(ns.map(n => ({
           id:n.id, title:n.title||"", body:n.body||"", pinned:!!n.pinned, author:n.author||"",
           updated_at:n.updated_at||"", deleted:!!n.deleted
-        }))))
+        }))); })
         .catch(()=>{});
 
       /* recurring subscriptions too */
-      this.go(this.base("subs")+"?select=*", { headers: this.head() })
+      this.go(this.q("subs", full), { headers: this.head() })
         .then(res => res.ok ? res.json() : [])
-        .then(ss => DB.mergeSubs(ss.map(s => ({
+        .then(ss => { Cloud.mark("subs", ss); return DB.mergeSubs(ss.map(s => ({
           id:s.id, client:s.client, item:s.item||"", qty:Number(s.qty||1),
           unit_price:Number(s.unit_price||0), unit_cost:Number(s.unit_cost||0), cycle:s.cycle||"monthly",
           next_due:s.next_due||"", last_billed:s.last_billed||"", note:s.note||"",
           start_date:s.start_date||"", term:s.term||"", ext_id:s.ext_id||"",
           active:s.active!==false, updated_at:s.updated_at||"", deleted:!!s.deleted
-        }))))
+        }))); })
         .catch(()=>{});
 
-      const r = await this.go(this.base()+"?select=*", { headers: this.head() });
+      const r = await this.go(this.q("entries", full), { headers: this.head() });
       if(!r.ok) throw new Error(await r.text());
       const rows = await r.json();
+      this.mark("entries", rows);
       const n = DB.merge(rows.map(x => ({
         id:x.id, work_date:x.work_date, client:x.client, hours:Number(x.hours),
         start_time:x.start_time||"", end_time:x.end_time||"",
@@ -1280,6 +1285,34 @@ const Cloud = {
       updated_at:r.updated_at||now, deleted:!!r.deleted };
   },
   clean(rows, table){ return rows.map(r => this.shape(r, table)); },
+  /* Pulling every row of every table on a timer is wasteful and, on a small
+     instance, enough to knock it over. Remember the newest row we've seen per
+     table and ask only for what changed since. A periodic full sweep guards
+     against anything the high-water mark could miss. */
+  SINCE: "tnit.since",
+  since: null,
+  pulls: 0,
+  loadSince(){
+    if(this.since) return this.since;
+    try{ this.since = JSON.parse(localStorage.getItem(this.SINCE) || "{}"); }
+    catch(e){ this.since = {}; }
+    return this.since;
+  },
+  mark(table, rows){
+    const s = this.loadSince();
+    let top = s[table] || "";
+    rows.forEach(r => { const u = r.updated_at || ""; if(u > top) top = u; });
+    if(top !== (s[table]||"")){
+      s[table] = top;
+      try{ localStorage.setItem(this.SINCE, JSON.stringify(s)); }catch(e){}
+    }
+  },
+  q(table, full){
+    const s = full ? "" : (this.loadSince()[table] || "");
+    return this.base(table) + "?select=*" + (s ? "&updated_at=gt." + encodeURIComponent(s) : "");
+  },
+  forget(){ this.since = {}; try{ localStorage.removeItem(this.SINCE); }catch(e){} },
+
   async send(rows, table){
     const r = await this.go(this.base(table), {
       method:"POST",
@@ -1309,12 +1342,14 @@ const Cloud = {
           return true;
         }
         this.badRows = (this.badRows||[]).concat(bad);
+      try{ localStorage.setItem("tnit.pending","1"); }catch(e){}
         console.warn("push: rejected rows", bad);
         this.setState("err","Some rows not saved");
         this.alarm(bad.length + " record" + (bad.length>1?"s":"") + " rejected — " + bad[0].msg);
         return false;
       }
       console.warn("push", table||"entries", err);
+      try{ localStorage.setItem("tnit.pending","1"); }catch(e){}
       this.setState("err","Not saved to server");
       this.alarm(err && err.message ? err.message : String(err));
       return false;
@@ -1372,7 +1407,7 @@ const Cloud = {
     const d = await this.push(DB.s.jobs, "jobs");
     const e = await this.push(DB.s.notes, "notes");
     const f = await this.push(DB.s.clocks, "clocks");
-    if(a && b && c && d && e && f) this.clearAlarm();
+    if(a && b && c && d && e && f){ this.clearAlarm(); try{ localStorage.removeItem("tnit.pending"); }catch(e){} }
     return a && b && c && d && e && f;
   },
   async test(url, key){
@@ -1822,14 +1857,21 @@ const UI = {
       if(!this._flushed){
         this._flushed = true;
         const fixed = DB.repairIds();
-        await Cloud.pushAll();
-        if(fixed) this.toast("Recovered " + fixed + " record" + (fixed>1?"s":"") + " that hadn't saved");
+        /* Only re-upload everything when we know something is stranded.
+           Doing it on every load hammered the database for no reason. */
+        let pending = false;
+        try{ pending = localStorage.getItem("tnit.pending") === "1"; }catch(e){}
+        if(fixed || pending){
+          await Cloud.pushAll();
+          if(fixed) this.toast("Recovered " + fixed + " record" + (fixed>1?"s":"") + " that hadn't saved");
+        }
       }
       else if(document.getElementById("syncAlarm")) await Cloud.pushAll();
       if(this.view!=="log") this.render();
     });
     sync();
-    if(!this._syncTimer) this._syncTimer = setInterval(sync, 60000);
+    if(!this._syncTimer) this._syncTimer = setInterval(()=>{ if(!document.hidden) sync(); }, 150000);
+    document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) sync(); });
     window.addEventListener("focus", sync);
   },
 
