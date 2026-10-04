@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#14161a">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
-<meta name="build" content="2026-08-09b">
+<meta name="build" content="2026-10-04a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Job Log">
@@ -469,6 +469,27 @@ ol.steps li{margin-bottom:9px}
   .cbot button#cOut{margin-left:0!important;order:9}
 }
 
+/* ---- recurring billing ---- */
+.blrow{display:flex;align-items:center;gap:14px;padding:13px 18px;border-top:1px solid var(--line-2)}
+.blrow:first-of-type{border-top:0}
+.blrow.off{opacity:.55}
+.blmain{flex:1;min-width:0}
+.bltitle{font-weight:650;font-size:14.5px}
+.bltask{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--ink-3);border:1px solid var(--line);border-radius:3px;padding:1px 5px;margin-left:7px;vertical-align:1px}
+.blmeta{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+.blnote{font-size:13px;color:var(--ink-2);margin-top:5px;white-space:pre-wrap}
+.blwhen{flex:0 0 auto}
+.blamt{flex:0 0 92px;text-align:right;font-weight:660;font-size:15px}
+.blact{display:flex;gap:6px;flex:0 0 auto}
+@media(max-width:860px){
+  .blrow{flex-wrap:wrap}
+  .blmain{flex:1 1 100%}
+  .blamt{flex:0 0 auto;text-align:left}
+  .blact{width:100%}
+  .blact .btn{flex:1}
+}
+
 /* ---- schedule ---- */
 .jday + .jday{border-top:1px solid var(--line-2)}
 .jdate{display:flex;align-items:center;gap:8px;padding:10px 18px;background:#fafbfc;
@@ -556,7 +577,8 @@ ol.steps li{margin-bottom:9px}
       <button data-v="sched"><i class="dot"></i>Schedule</button>
       <button data-v="cal"><i class="dot"></i>Calendar</button>
       <button data-v="clients"><i class="dot"></i>Clients</button>
-      <button data-v="subs"><i class="dot"></i>Recurring</button>
+      <button data-v="subs"><i class="dot"></i>Subscriptions</button>
+      <button data-v="bills"><i class="dot"></i>Recurring</button>
       <button data-v="find"><i class="dot"></i>History</button>
       <button data-v="notes"><i class="dot"></i>Notes</button>
       <button data-v="set"><i class="dot"></i>Settings</button>
@@ -574,7 +596,8 @@ ol.steps li{margin-bottom:9px}
     <button data-v="sched">Schedule</button>
     <button data-v="cal">Month</button>
     <button data-v="clients">Clients</button>
-    <button data-v="subs">Recurring</button>
+    <button data-v="subs">Subs</button>
+    <button data-v="bills">Recurring</button>
     <button data-v="find">Search</button>
     <button data-v="notes">Notes</button>
     <button data-v="set">Settings</button>
@@ -807,7 +830,7 @@ const DB = {
     return [...seen.values()].sort((a,b)=>a.localeCompare(b));
   },
   /* ---- recurring subscriptions ---- */
-  liveSubs(){ return this.s.subs.filter(s => !s.deleted); },
+  liveSubs(){ return this.s.subs.filter(s => !s.deleted && !DB.isBill(s)); },
   subsFor(client){
     const k = (client||"").trim().toLowerCase();
     return this.liveSubs().filter(s => s.client.trim().toLowerCase() === k);
@@ -944,6 +967,45 @@ const DB = {
     });
     if(n) this.save();
     return n;
+  },
+
+  /* ---- recurring billing ----
+     A recurring charge and a resold subscription are the same shape: a client,
+     a price, a cycle and a due date. They share the subs table and are told
+     apart by a marker, so no second table to keep in step. */
+  BILL_TAG: "bill",
+  isBill(s){ return (s.ext_id || "") === DB.BILL_TAG; },
+  liveBills(){ return this.s.subs.filter(s => !s.deleted && DB.isBill(s)); },
+  /* bills are stored as subs: title->item, amount->unit_price, last_done->last_billed */
+  saveBill(b){
+    const prev = b.id ? this.s.subs.find(x => x.id === b.id) : null;
+    const hasAmt = b.amount !== null && b.amount !== undefined && b.amount !== "";
+    return this.saveSub({
+      id: b.id || undefined,
+      ext_id: DB.BILL_TAG,
+      client: b.client || "",
+      item: b.title || "",
+      qty: 1,
+      unit_price: hasAmt ? Number(b.amount) : 0,
+      unit_cost: 0,
+      cycle: b.cycle || "monthly",
+      next_due: b.next_due || D.today(),
+      last_billed: b.last_done || (prev ? prev.last_billed : "") || "",
+      note: b.note || "",
+      term: hasAmt ? "" : "reminder",      /* blank amount = a reminder, not a charge */
+      active: b.active !== false
+    });
+  },
+  removeBill(id){ this.removeSub(id); },
+  /* done for this cycle: stamp it and roll the due date forward */
+  billDone(id){
+    const r = this.liveBills().find(x => x.id === id);
+    if(!r) return null;
+    const from = r.next_due || D.today();
+    return this.saveSub(Object.assign({}, r, {
+      last_billed: D.today(),
+      next_due: SUB.advance(from, r.cycle || "monthly")
+    }));
   },
 
   /* ---- notes: shared reference anyone can add to ---- */
@@ -1749,6 +1811,7 @@ const UI = {
   bill: "",         /* "" = any status, "open" = needs billing, "billed" = billed */
   weekView: "client",
   findView: "entry",   /* entry | invoice */
+  clientQ: "",
   draftHours: "",
 
   async boot(){
@@ -1911,6 +1974,7 @@ const UI = {
     if(this.view==="clients"){ this.vClients(v); }
     if(this.view==="subs")   { this.vSubs(v); }
     if(this.view==="find") { this.head("History","Every job, searchable."); v.innerHTML = this.vFind(); this.wireFind(); }
+    if(this.view==="bills"){ this.vBills(v); }
     if(this.view==="sched"){ this.vSched(v); }
     if(this.view==="notes"){ this.vNotes(v); }
     if(this.view==="set")  { this.head("Settings","Your name, and shared access for the crew."); v.innerHTML = this.vSet(); this.wireSet(); }
@@ -2145,6 +2209,161 @@ const UI = {
       this.render();
     };
     setTimeout(()=>{ const c=$("k-client"); if(c) c.focus(); }, 60);
+  },
+
+  /* ---------- RECURRING BILLING ---------- */
+  billFilter: "all",
+
+  vBills(v){
+    const all = DB.liveBills();
+    const today = D.today();
+    const act = all.filter(b => b.active);
+    const due = act.filter(b => SUB.daysUntil(b.next_due) <= 0);
+    const soon = act.filter(b => { const d = SUB.daysUntil(b.next_due); return d > 0 && d <= 14; });
+    const amt = b => (b.term === "reminder") ? null : Number(b.unit_price || 0);
+    const charges = act.filter(b => amt(b));
+    const perMonth = charges.reduce((t,b)=> t + (amt(b) / (SUB.cycles[b.cycle]||1)), 0);
+    const dueNow = due.reduce((t,b)=> t + (amt(b) || 0), 0);
+
+    this.head("Recurring", act.length + " item" + (act.length===1?"":"s")
+      + (perMonth ? " · " + $r(perMonth) + "/mo" : "")
+      + (due.length ? " · " + due.length + " due now" : ""),
+      `<button class="btn dark" id="blNew">+ Add Recurring Item</button>`);
+
+    let list = all.slice();
+    if(this.billFilter === "due")    list = list.filter(b => b.active && SUB.daysUntil(b.next_due) <= 14);
+    if(this.billFilter === "active") list = list.filter(b => b.active);
+    if(this.billFilter === "paused") list = list.filter(b => !b.active);
+    list.sort((a,b)=> (a.active===b.active ? 0 : a.active ? -1 : 1)
+                    || (a.next_due||"9999").localeCompare(b.next_due||"9999"));
+
+    const row = b => {
+      const d = SUB.daysUntil(b.next_due);
+      const state = !b.active ? "paused" : d <= 0 ? "overdue" : d <= 14 ? "due" : "ok";
+      const money = !!amt(b);
+      return `
+      <div class="blrow${b.active?"":" off"}">
+        <div class="blmain">
+          <div class="bltitle">${esc(b.item || "(untitled)")}
+            ${money ? "" : `<span class="bltask">reminder</span>`}</div>
+          <div class="blmeta">${esc(b.client || "No client")} · ${esc(SUB.label[b.cycle]||b.cycle)}${b.last_billed?" · last done "+esc(D.due(b.last_billed)):""}</div>
+          ${b.note?`<div class="blnote">${esc(b.note)}</div>`:""}
+        </div>
+        <div class="blwhen">
+          ${b.active ? `<span class="pill ${state==="overdue"?"unbilled":state==="due"?"partial":"billed"}">${
+             state==="overdue" ? (d===0?"Due today":"Overdue "+Math.abs(d)+"d")
+             : state==="due" ? "Due in "+d+"d" : "Due "+esc(D.due(b.next_due))}</span>`
+            : `<span class="pill nocharge">Paused</span>`}
+        </div>
+        <div class="blamt tnum">${money ? $m(amt(b)) : "—"}</div>
+        <div class="blact noprint">
+          ${b.active?`<button class="btn sm accent" data-bdone="${b.id}">${money?"Mark Billed":"Mark Done"}</button>`:""}
+          <button class="btn sm ghost" data-bedit="${b.id}">Edit</button>
+        </div>
+      </div>`;
+    };
+
+    v.innerHTML = `
+      <div class="panel mb"><div class="panel-b" style="padding-top:16px">
+        <div class="stats" style="margin:0">
+          <div class="stat"><div class="k">Per Month</div><div class="v tnum">${$r(perMonth)}</div></div>
+          <div class="stat${due.length?" warn":""}"><div class="k">Due Now</div><div class="v tnum">${$r(dueNow)}</div></div>
+          <div class="stat"><div class="k">Due Soon</div><div class="v tnum">${soon.length}</div></div>
+          <div class="stat"><div class="k">Clients</div><div class="v tnum">${new Set(act.map(b=>b.client).filter(Boolean)).size}</div></div>
+        </div>
+      </div></div>
+
+      ${due.length ? `
+      <div class="panel mb">
+        <div class="panel-h"><h2>Needs Billing Now</h2><span class="hint" style="margin:0">${due.length} past due or due today</span></div>
+        ${due.sort((a,b)=>(a.next_due||"").localeCompare(b.next_due||"")).map(row).join("")}
+      </div>` : ""}
+
+      <div class="seg mb" id="blSeg">
+        ${[["all","All"],["due","Due Soon"],["active","Active"],["paused","Paused"]].map(([k,l])=>
+          `<button type="button" data-bf="${k}"${this.billFilter===k?" class='on'":""}>${l}</button>`).join("")}
+      </div>
+
+      <div class="panel">
+        <div class="panel-h"><h2>All Recurring</h2><span class="hint" style="margin:0">${list.length} shown</span></div>
+        ${list.length ? list.map(row).join("")
+          : `<div class="empty"><b>Nothing here yet</b>Add the things you bill on a schedule — managed services, monitoring, backups — or a reminder you want each month.</div>`}
+      </div>`;
+
+    document.getElementById("blNew").onclick = ()=> this.editBill(null);
+    v.querySelectorAll("#blSeg button").forEach(b => b.onclick = ()=>{ this.billFilter = b.dataset.bf; this.render(); });
+    v.querySelectorAll("[data-bedit]").forEach(b => b.onclick = ()=> this.editBill(b.dataset.bedit));
+    v.querySelectorAll("[data-bdone]").forEach(b => b.onclick = ()=>{
+      const r = DB.billDone(b.dataset.bdone);
+      if(r) this.toast("Done — next due " + D.due(r.next_due));
+      this.render();
+    });
+  },
+
+  editBill(id){
+    const b = id ? DB.liveBills().find(x => x.id === id) : null;
+    const cl = DB.clientList().map(c=>c.name);
+    this.modal(b ? "Edit Recurring Item" : "Add Recurring Item",
+      `<div class="grid2 mb">
+         <div><label class="f" for="b-title">What is it?</label>
+           <input class="inp" id="b-title" value="${esc(b?b.item:"")}" autocomplete="off" placeholder="Managed services, backup monitoring, monthly invoice…"></div>
+         <div><label class="f" for="b-client">Client</label>
+           <input class="inp" id="b-client" list="bcl" value="${esc(b?b.client:"")}" autocomplete="off" placeholder="Who it's for">
+           <datalist id="bcl">${cl.map(c=>`<option value="${esc(c)}">`).join("")}</datalist></div>
+       </div>
+
+       <div class="mb">
+         <div class="timerow">
+           <div class="tf"><label class="f" for="b-amount" style="font-size:11px">Amount</label>
+             <input class="inp tnum" id="b-amount" type="number" step="0.01" min="0" inputmode="decimal"
+                    value="${b && b.term!=="reminder" && Number(b.unit_price||0) ? b.unit_price : ""}" placeholder="leave blank" style="width:140px"></div>
+           <div class="tf"><label class="f" for="b-cycle" style="font-size:11px">Every</label>
+             <select class="inp" id="b-cycle" style="width:150px">
+               ${["monthly","quarterly","annual"].map(c=>`<option value="${c}"${b&&b.cycle===c?" selected":""}>${SUB.label[c]}</option>`).join("")}
+             </select></div>
+           <div class="tf"><label class="f" for="b-due" style="font-size:11px">Next due</label>
+             <input class="inp" id="b-due" type="date" value="${esc(b?b.next_due:D.today())}" style="width:170px"></div>
+         </div>
+         <div class="hint">Leave the amount blank for a reminder with no charge — it still shows up when it's due.</div>
+       </div>
+
+       <div class="mb"><label class="f" for="b-note">Notes</label>
+         <textarea class="inp" id="b-note" placeholder="Anything worth remembering when you bill it">${esc(b?b.note:"")}</textarea></div>
+
+       <label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer">
+         <input type="checkbox" id="b-active" style="width:16px;height:16px"${!b||b.active?" checked":""}>
+         Active — show it in the due list
+       </label>
+
+       ${b?`<div style="margin-top:14px"><button class="btn ghost" id="b-del" style="color:#c0392b">Remove</button></div>`:""}`,
+      `<button class="btn" onclick="UI.closeModal()">Cancel</button>
+       <button class="btn accent" id="b-save">${b?"Save Changes":"Add It"}</button>`);
+
+    const $ = i => document.getElementById(i);
+    if($("b-del")) $("b-del").onclick = ()=>{
+      if(!confirm("Remove this recurring item?")) return;
+      DB.removeBill(b.id); this.closeModal(); this.toast("Removed"); this.render();
+    };
+    $("b-save").onclick = ()=>{
+      const title = $("b-title").value.trim();
+      if(!title){ this.toast("Give it a name"); $("b-title").focus(); return; }
+      const amt = $("b-amount").value;
+      DB.saveBill({
+        id: b ? b.id : undefined,
+        title, client: $("b-client").value.trim(),
+        kind: amt === "" ? "task" : "charge",
+        amount: amt === "" ? null : Number(amt),
+        cycle: $("b-cycle").value,
+        next_due: $("b-due").value || D.today(),
+        last_done: b ? b.last_billed : "",
+        note: $("b-note").value.trim(),
+        active: $("b-active").checked
+      });
+      this.closeModal();
+      this.toast(b ? "Updated" : "Added to Recurring");
+      this.render();
+    };
+    setTimeout(()=>{ const t=$("b-title"); if(t && !t.value) t.focus(); }, 60);
   },
 
   /* ---------- SCHEDULE ---------- */
@@ -3408,18 +3627,33 @@ const UI = {
   vClients(v){
     if(this.openClient) return this.vClientDetail(v);
 
-    const list = DB.clientList().map(c => Object.assign({}, c, DB.statsFor(c.name)))
+    const all = DB.clientList().map(c => Object.assign({}, c, DB.statsFor(c.name)))
                    .sort((a,b)=> (b.last||"").localeCompare(a.last||""));
-    this.head("Clients", list.length + " client" + (list.length===1?"":"s") + " on the books",
+    const term = (this.clientQ || "").trim().toLowerCase();
+    const list = term
+      ? all.filter(c => (c.name + " " + (c.address||"") + " " + (c.contact||"") + " " + (c.phone||"")).toLowerCase().includes(term))
+      : all;
+
+    this.head("Clients",
+      term ? list.length + " of " + all.length + " match “" + term + "”"
+           : all.length + " client" + (all.length===1?"":"s") + " on the books",
       `<button class="btn dark" id="cNew">+ Add Client</button>`);
 
-    v.innerHTML = list.length ? `<div class="cgrid">${list.map(c=>`
+    const hl = s => { const t = esc(s); if(!term) return t;
+      return t.replace(new RegExp("("+term.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","ig"), "<mark>$1</mark>"); };
+
+    v.innerHTML = `
+      <div class="panel mb"><div class="panel-b" style="padding:14px 18px">
+        <input class="inp" id="cq" placeholder="Search clients — name, address, contact or phone…"
+               value="${esc(this.clientQ||"")}" autocomplete="off">
+      </div></div>` + (list.length ? `<div class="cgrid">${list.map(c=>`
+
       <div class="ccard" style="position:relative;padding:0">
         <button class="btn ghost sm noprint" data-cedit="${esc(c.name)}"
           style="position:absolute;top:10px;right:10px;z-index:2">Edit</button>
         <button data-c="${esc(c.name)}" style="width:100%;text-align:left;padding:16px;display:block">
-        <h3 style="padding-right:52px">${esc(c.name)}</h3>
-        <div class="ad">${esc(c.address || "No address on file")}</div>
+        <h3 style="padding-right:52px">${hl(c.name)}</h3>
+        <div class="ad">${c.address ? hl(c.address) : "No address on file"}</div>
         <div class="nums">
           <div>Visits<b class="tnum">${c.visits}</b></div>
           <div>Hours<b class="tnum">${hFmt(c.hours)}</b></div>
@@ -3430,9 +3664,21 @@ const UI = {
         </div>
         </button>
       </div>`).join("")}</div>`
-      : `<div class="panel"><div class="empty"><b>No clients yet</b>They're created automatically the first time you log a job — or add one now.</div></div>`;
+      : term
+        ? `<div class="panel"><div class="empty"><b>No match for “${esc(term)}”</b>Try part of the name, street or contact.</div></div>`
+        : `<div class="panel"><div class="empty"><b>No clients yet</b>They're created automatically the first time you log a job — or add one now.</div></div>`);
+
+    const q = document.getElementById("cq");
+    q.addEventListener("input", ()=>{
+      this.clientQ = q.value;
+      const at = q.selectionStart;
+      this.render();
+      const nq = document.getElementById("cq");
+      if(nq){ nq.focus(); nq.setSelectionRange(at, at); }
+    });
 
     document.getElementById("cNew").onclick = ()=> this.editClient("");
+
     v.querySelectorAll("[data-c]").forEach(b => b.onclick = ()=>{ this.openClient = b.dataset.c; this.render(); });
     v.querySelectorAll("[data-cedit]").forEach(b => b.onclick = e => { e.stopPropagation(); this.editClient(b.dataset.cedit); });
   },
@@ -3744,7 +3990,7 @@ const UI = {
     const dueSoon = active.filter(s => SUB.daysUntil(s.next_due) <= 14);
     const dueValue = dueSoon.reduce((t,s)=> t + SUB.amount(s), 0);
 
-    this.head("Recurring", active.length + " active · " + $r(mrr) + "/mo billed · " + $r(mprofit) + "/mo profit",
+    this.head("Subscriptions", active.length + " active · " + $r(mrr) + "/mo billed · " + $r(mprofit) + "/mo profit",
       `<button class="btn" id="sbImport">Import CSV</button>
        <button class="btn dark" id="sbNew">+ Add Subscription</button>`);
 
